@@ -507,6 +507,10 @@
           <label>Cost (£)</label>
           <input type="number" id="materialCost" placeholder="0.00" step="0.01" inputmode="decimal">
         </div>
+        <div class="form-group">
+          <label>Notes (optional)</label>
+          <input type="text" id="materialNotes" placeholder="e.g. From Screwfix, receipt in folder">
+        </div>
         <button class="btn btn-secondary" onclick="addMaterial()">Add Material</button>
         <button class="btn btn-outline" onclick="hideMaterialsModal()">Cancel</button>
         
@@ -879,6 +883,7 @@
     async function addMaterial() {
       const desc = document.getElementById('materialDesc').value.trim();
       const cost = parseFloat(document.getElementById('materialCost').value) || 0;
+      const notes = document.getElementById('materialNotes').value.trim();
       
       if (!desc) {
         alert('Please enter a description');
@@ -887,11 +892,12 @@
       
       try {
         await apiCall('addMaterial', { 
-          data: { jobId: currentJobId, description: desc, cost: cost }
+          data: { jobId: currentJobId, description: desc, cost: cost, notes: notes }
         });
         
         document.getElementById('materialDesc').value = '';
         document.getElementById('materialCost').value = '';
+        document.getElementById('materialNotes').value = '';
         
         await loadMaterialsList();
         await refreshJobSummary();
