@@ -806,10 +806,18 @@
       document.getElementById('partInfo').textContent = 
         (currentJob.partName ? currentJob.partName + ' • ' : '') + (currentJob.partType || '-');
       
+      // Reset to default state (START visible, STOP hidden)
+      document.getElementById('startSection').classList.remove('hidden');
+      document.getElementById('stopSection').classList.add('hidden');
+      document.getElementById('timerDisplay').textContent = '00:00:00';
+      document.getElementById('timerDisplay').classList.remove('timer-running');
+      document.getElementById('timerDisplay').classList.add('timer-stopped');
+      
       showScreen('tracker');
       
       await refreshJobSummary();
       
+      // Check if there's an active timer running
       const activeTimer = await apiCall('getActiveTimer', { jobId: currentJobId });
       if (activeTimer) {
         timerStartTime = new Date(activeTimer.startTime);
@@ -845,7 +853,20 @@
     
     async function startTimer() {
       try {
-        await apiCall('startTimer', { jobId: currentJobId });
+        const result = await apiCall('startTimer', { jobId: currentJobId });
+        
+        if (result.error && result.error.includes('already running')) {
+          // Timer was already running - just pick it up
+          const activeTimer = await apiCall('getActiveTimer', { jobId: currentJobId });
+          if (activeTimer) {
+            timerStartTime = new Date(activeTimer.startTime);
+            startLocalTimer();
+            document.getElementById('startSection').classList.add('hidden');
+            document.getElementById('stopSection').classList.remove('hidden');
+          }
+          return;
+        }
+        
         timerStartTime = new Date();
         startLocalTimer();
         
@@ -853,7 +874,18 @@
         document.getElementById('stopSection').classList.remove('hidden');
         
       } catch (err) {
-        alert('Failed to start timer: ' + err.message);
+        // Check if it's the "already running" error
+        if (err.message && err.message.includes('already running')) {
+          const activeTimer = await apiCall('getActiveTimer', { jobId: currentJobId });
+          if (activeTimer) {
+            timerStartTime = new Date(activeTimer.startTime);
+            startLocalTimer();
+            document.getElementById('startSection').classList.add('hidden');
+            document.getElementById('stopSection').classList.remove('hidden');
+          }
+        } else {
+          alert('Failed to start timer: ' + err.message);
+        }
       }
     }
     
