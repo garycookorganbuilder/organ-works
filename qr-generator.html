@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Organ Works - QR Code Generator</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: #1a1a2e;
+      color: white;
+      min-height: 100vh;
+    }
+    
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    
+    h1 {
+      text-align: center;
+      margin-bottom: 8px;
+    }
+    
+    .subtitle {
+      text-align: center;
+      color: #888;
+      margin-bottom: 32px;
+    }
+    
+    .config-section {
+      background: #16213e;
+      padding: 24px;
+      border-radius: 12px;
+      margin-bottom: 24px;
+    }
+    
+    .config-section h2 {
+      margin: 0 0 16px 0;
+      font-size: 1.2rem;
+    }
+    
+    .form-row {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    
+    .form-group {
+      flex: 1;
+      min-width: 150px;
+    }
+    
+    .form-group label {
+      display: block;
+      margin-bottom: 6px;
+      color: #aaa;
+      font-size: 0.9rem;
+    }
+    
+    .form-group input {
+      width: 100%;
+      padding: 12px;
+      font-size: 1rem;
+      border: 2px solid #333;
+      border-radius: 8px;
+      background: #0f0f23;
+      color: white;
+    }
+    
+    .form-group input:focus {
+      outline: none;
+      border-color: #4cc9f0;
+    }
+    
+    .btn {
+      padding: 14px 24px;
+      font-size: 1rem;
+      font-weight: bold;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: transform 0.1s, opacity 0.1s;
+    }
+    
+    .btn:hover {
+      opacity: 0.9;
+    }
+    
+    .btn:active {
+      transform: scale(0.98);
+    }
+    
+    .btn-primary {
+      background: #22c55e;
+      color: white;
+    }
+    
+    .btn-secondary {
+      background: #3b82f6;
+      color: white;
+    }
+    
+    .btn-outline {
+      background: transparent;
+      border: 2px solid #555;
+      color: #aaa;
+    }
+    
+    .btn-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    
+    .info-box {
+      background: #0f0f23;
+      padding: 16px;
+      border-radius: 8px;
+      margin-top: 16px;
+      font-size: 0.9rem;
+      color: #888;
+    }
+    
+    .info-box code {
+      background: #16213e;
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #4cc9f0;
+    }
+    
+    /* Print preview area */
+    .preview-section {
+      background: #16213e;
+      padding: 24px;
+      border-radius: 12px;
+      margin-bottom: 24px;
+    }
+    
+    .preview-section h2 {
+      margin: 0 0 16px 0;
+      font-size: 1.2rem;
+    }
+    
+    .label-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 16px;
+    }
+    
+    .label-card {
+      background: white;
+      color: black;
+      padding: 12px;
+      border-radius: 8px;
+      text-align: center;
+    }
+    
+    .label-card .qr-container {
+      margin: 0 auto 8px;
+      width: 120px;
+      height: 120px;
+    }
+    
+    .label-card .job-id {
+      font-family: monospace;
+      font-size: 1.2rem;
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+    
+    .label-card .label-text {
+      font-size: 0.8rem;
+      color: #666;
+    }
+    
+    /* Print styles */
+    @media print {
+      body {
+        background: white;
+        color: black;
+        padding: 0;
+        margin: 0;
+      }
+      
+      .container {
+        max-width: none;
+      }
+      
+      .config-section,
+      .btn-row,
+      h1,
+      .subtitle,
+      .preview-section h2 {
+        display: none !important;
+      }
+      
+      .preview-section {
+        background: none;
+        padding: 0;
+        margin: 0;
+      }
+      
+      .label-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8mm;
+        padding: 10mm;
+      }
+      
+      .label-card {
+        border: 1px solid #ccc;
+        page-break-inside: avoid;
+        padding: 8px;
+      }
+      
+      .label-card .qr-container {
+        width: 25mm;
+        height: 25mm;
+      }
+      
+      .label-card .qr-container img,
+      .label-card .qr-container canvas {
+        width: 100% !important;
+        height: 100% !important;
+      }
+    }
+    
+    /* Avery label styles (optional) */
+    @media print {
+      .label-grid.avery-l7163 {
+        grid-template-columns: repeat(2, 99.1mm);
+        gap: 0;
+        padding: 15.15mm 4.65mm;
+      }
+      
+      .avery-l7163 .label-card {
+        width: 99.1mm;
+        height: 38.1mm;
+        border: none;
+        display: flex;
+        align-items: center;
+        padding: 4mm;
+      }
+      
+      .avery-l7163 .qr-container {
+        width: 30mm;
+        height: 30mm;
+        margin: 0 8mm 0 0;
+      }
+    }
+    
+    .empty-state {
+      text-align: center;
+      padding: 48px;
+      color: #666;
+    }
+    
+    .empty-state p {
+      margin: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎹 Organ Works QR Generator</h1>
+    <p class="subtitle">Generate QR codes for job tracking labels</p>
+    
+    <div class="config-section">
+      <h2>⚙️ Configuration</h2>
+      
+      <div class="form-row">
+        <div class="form-group" style="flex: 2;">
+          <label>Tracker URL (your hosted tracker.html)</label>
+          <input type="text" id="trackerUrl" placeholder="https://yoursite.github.io/organ-works/tracker.html">
+        </div>
+      </div>
+      
+      <div class="form-row">
+        <div class="form-group">
+          <label>Starting Job ID</label>
+          <input type="number" id="startId" value="1" min="1" max="99999999">
+        </div>
+        <div class="form-group">
+          <label>Number of Labels</label>
+          <input type="number" id="labelCount" value="20" min="1" max="100">
+        </div>
+        <div class="form-group">
+          <label>Optional Label Text</label>
+          <input type="text" id="labelText" placeholder="e.g. Organ Works 2025">
+        </div>
+      </div>
+      
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="generateLabels()">Generate QR Codes</button>
+        <button class="btn btn-secondary" onclick="window.print()">🖨️ Print Labels</button>
+        <button class="btn btn-outline" onclick="clearLabels()">Clear</button>
+      </div>
+      
+      <div class="info-box">
+        <strong>How it works:</strong><br>
+        Each QR code encodes a URL like: <code>https://yoursite.com/tracker.html?job=00000001</code><br><br>
+        When scanned with a phone camera, it opens the tracker with that job ID pre-loaded.
+        Print these on sticky labels and attach to organs, parts, or job sheets.
+      </div>
+    </div>
+    
+    <div class="preview-section">
+      <h2>📋 Labels Preview</h2>
+      
+      <div class="label-grid" id="labelGrid">
+        <div class="empty-state">
+          <p>Configure settings above and click "Generate QR Codes"</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Load saved tracker URL
+    document.addEventListener('DOMContentLoaded', () => {
+      const savedUrl = localStorage.getItem('organWorks_trackerUrl');
+      if (savedUrl) {
+        document.getElementById('trackerUrl').value = savedUrl;
+      }
+      
+      const savedStartId = localStorage.getItem('organWorks_lastId');
+      if (savedStartId) {
+        document.getElementById('startId').value = parseInt(savedStartId) + 1;
+      }
+    });
+    
+    function generateLabels() {
+      const trackerUrl = document.getElementById('trackerUrl').value.trim();
+      const startId = parseInt(document.getElementById('startId').value) || 1;
+      const count = parseInt(document.getElementById('labelCount').value) || 20;
+      const labelText = document.getElementById('labelText').value.trim();
+      
+      if (!trackerUrl) {
+        alert('Please enter your tracker URL first');
+        return;
+      }
+      
+      // Save for next time
+      localStorage.setItem('organWorks_trackerUrl', trackerUrl);
+      localStorage.setItem('organWorks_lastId', startId + count - 1);
+      
+      const grid = document.getElementById('labelGrid');
+      grid.innerHTML = '';
+      
+      for (let i = 0; i < count; i++) {
+        const jobId = (startId + i).toString().padStart(8, '0');
+        const fullUrl = `${trackerUrl}?job=${jobId}`;
+        
+        const card = document.createElement('div');
+        card.className = 'label-card';
+        
+        const qrContainer = document.createElement('div');
+        qrContainer.className = 'qr-container';
+        qrContainer.id = `qr-${jobId}`;
+        
+        const jobIdDiv = document.createElement('div');
+        jobIdDiv.className = 'job-id';
+        jobIdDiv.textContent = jobId;
+        
+        card.appendChild(qrContainer);
+        card.appendChild(jobIdDiv);
+        
+        if (labelText) {
+          const labelDiv = document.createElement('div');
+          labelDiv.className = 'label-text';
+          labelDiv.textContent = labelText;
+          card.appendChild(labelDiv);
+        }
+        
+        grid.appendChild(card);
+        
+        // Generate QR code
+        new QRCode(qrContainer, {
+          text: fullUrl,
+          width: 120,
+          height: 120,
+          colorDark: '#000000',
+          colorLight: '#ffffff',
+          correctLevel: QRCode.CorrectLevel.M
+        });
+      }
+    }
+    
+    function clearLabels() {
+      document.getElementById('labelGrid').innerHTML = `
+        <div class="empty-state">
+          <p>Configure settings above and click "Generate QR Codes"</p>
+        </div>
+      `;
+    }
+    
+    // Generate single QR for testing
+    function generateSingle(jobId) {
+      const trackerUrl = document.getElementById('trackerUrl').value.trim();
+      if (!trackerUrl) {
+        alert('Please enter your tracker URL first');
+        return;
+      }
+      
+      document.getElementById('startId').value = jobId;
+      document.getElementById('labelCount').value = 1;
+      generateLabels();
+    }
+  </script>
+</body>
+</html>

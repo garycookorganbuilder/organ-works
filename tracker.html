@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Organ Works Tracker</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      padding: 16px;
+      background: #1a1a2e;
+      color: white;
+      min-height: 100vh;
+    }
+    
+    .container {
+      max-width: 500px;
+      margin: 0 auto;
+    }
+    
+    h1 {
+      font-size: 1.5rem;
+      margin: 0 0 8px 0;
+      text-align: center;
+    }
+    
+    .job-id {
+      font-size: 2rem;
+      font-weight: bold;
+      text-align: center;
+      color: #4cc9f0;
+      margin-bottom: 16px;
+      font-family: monospace;
+    }
+    
+    .status-bar {
+      background: #16213e;
+      padding: 16px;
+      border-radius: 12px;
+      margin-bottom: 16px;
+    }
+    
+    .status-bar h2 {
+      margin: 0 0 4px 0;
+      font-size: 1.25rem;
+    }
+    
+    .status-bar p {
+      margin: 0;
+      color: #aaa;
+      font-size: 0.9rem;
+    }
+    
+    .timer-display {
+      font-size: 3rem;
+      font-weight: bold;
+      text-align: center;
+      font-family: monospace;
+      padding: 24px;
+      background: #0f0f23;
+      border-radius: 12px;
+      margin-bottom: 16px;
+    }
+    
+    .timer-running {
+      color: #4ade80;
+      animation: pulse 2s infinite;
+    }
+    
+    .timer-stopped {
+      color: #888;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+    
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 24px;
+      font-size: 1.5rem;
+      font-weight: bold;
+      border: none;
+      border-radius: 16px;
+      cursor: pointer;
+      margin-bottom: 12px;
+      transition: transform 0.1s, opacity 0.1s;
+    }
+    
+    .btn:active {
+      transform: scale(0.98);
+      opacity: 0.9;
+    }
+    
+    .btn-start {
+      background: #22c55e;
+      color: white;
+    }
+    
+    .btn-stop {
+      background: #ef4444;
+      color: white;
+    }
+    
+    .btn-secondary {
+      background: #3b82f6;
+      color: white;
+      padding: 16px;
+      font-size: 1.1rem;
+    }
+    
+    .btn-outline {
+      background: transparent;
+      border: 2px solid #555;
+      color: #aaa;
+      padding: 16px;
+      font-size: 1rem;
+    }
+    
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    .btn-row {
+      display: flex;
+      gap: 12px;
+    }
+    
+    .btn-row .btn {
+      flex: 1;
+    }
+    
+    .form-group {
+      margin-bottom: 16px;
+    }
+    
+    .form-group label {
+      display: block;
+      margin-bottom: 6px;
+      color: #aaa;
+      font-size: 0.9rem;
+    }
+    
+    .form-group input,
+    .form-group select,
+    .form-group textarea {
+      width: 100%;
+      padding: 16px;
+      font-size: 1.1rem;
+      border: 2px solid #333;
+      border-radius: 12px;
+      background: #16213e;
+      color: white;
+    }
+    
+    .form-group input:focus,
+    .form-group select:focus,
+    .form-group textarea:focus {
+      outline: none;
+      border-color: #4cc9f0;
+    }
+    
+    .form-group select {
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+    }
+    
+    .totals {
+      background: #16213e;
+      padding: 16px;
+      border-radius: 12px;
+      margin-bottom: 16px;
+    }
+    
+    .totals-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #333;
+    }
+    
+    .totals-row:last-child {
+      border-bottom: none;
+    }
+    
+    .totals-label {
+      color: #888;
+    }
+    
+    .totals-value {
+      font-weight: bold;
+      font-size: 1.1rem;
+    }
+    
+    .totals-value.hours {
+      color: #4cc9f0;
+    }
+    
+    .totals-value.cost {
+      color: #4ade80;
+    }
+    
+    .history {
+      background: #16213e;
+      padding: 16px;
+      border-radius: 12px;
+      margin-bottom: 16px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    
+    .history h3 {
+      margin: 0 0 12px 0;
+      font-size: 1rem;
+      color: #888;
+    }
+    
+    .history-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #333;
+      font-size: 0.9rem;
+    }
+    
+    .history-item:last-child {
+      border-bottom: none;
+    }
+    
+    .loading {
+      text-align: center;
+      padding: 48px;
+    }
+    
+    .loading-spinner {
+      width: 48px;
+      height: 48px;
+      border: 4px solid #333;
+      border-top-color: #4cc9f0;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 16px;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .error {
+      background: #7f1d1d;
+      color: #fca5a5;
+      padding: 16px;
+      border-radius: 12px;
+      margin-bottom: 16px;
+    }
+    
+    .success {
+      background: #14532d;
+      color: #86efac;
+      padding: 16px;
+      border-radius: 12px;
+      margin-bottom: 16px;
+    }
+    
+    .modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 100;
+    }
+    
+    .modal-content {
+      background: #1a1a2e;
+      padding: 24px;
+      border-radius: 16px;
+      width: 100%;
+      max-width: 400px;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    
+    .modal h2 {
+      margin: 0 0 16px 0;
+    }
+    
+    .hidden {
+      display: none !important;
+    }
+    
+    .materials-list {
+      background: #0f0f23;
+      padding: 12px;
+      border-radius: 8px;
+      margin-top: 8px;
+    }
+    
+    .material-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 0;
+      font-size: 0.9rem;
+      border-bottom: 1px solid #333;
+    }
+    
+    .material-item:last-child {
+      border-bottom: none;
+    }
+    
+    .config-bar {
+      background: #0f0f23;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 0.8rem;
+      color: #666;
+    }
+    
+    .config-bar input {
+      width: 100%;
+      padding: 8px;
+      font-size: 0.8rem;
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #16213e;
+      color: white;
+      margin-top: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container" id="app">
+    <!-- Loading State -->
+    <div id="loading" class="loading">
+      <div class="loading-spinner"></div>
+      <p>Loading...</p>
+    </div>
+    
+    <!-- Config Required -->
+    <div id="config-screen" class="hidden">
+      <h1>⚙️ Setup Required</h1>
+      <div class="config-bar">
+        <label>Enter your Google Apps Script Web App URL:</label>
+        <input type="text" id="apiUrlInput" placeholder="https://script.google.com/macros/s/...">
+      </div>
+      <button class="btn btn-secondary" onclick="saveConfig()">Save & Continue</button>
+      <p style="margin-top: 16px; color: #888; font-size: 0.85rem;">
+        This URL is from your Google Apps Script deployment. You only need to enter this once.
+      </p>
+    </div>
+    
+    <!-- No Job ID -->
+    <div id="no-job" class="hidden">
+      <h1>🎹 Organ Works Tracker</h1>
+      <div class="error">
+        <strong>No job ID provided</strong>
+        <p>Scan a QR code to track time on a job, or enter a job ID below.</p>
+      </div>
+      <div class="form-group">
+        <label>Job ID (8 digits)</label>
+        <input type="text" id="manualJobId" placeholder="00000001" maxlength="8" pattern="[0-9]*" inputmode="numeric">
+      </div>
+      <button class="btn btn-secondary" onclick="loadManualJob()">Load Job</button>
+    </div>
+    
+    <!-- New Job Setup -->
+    <div id="new-job" class="hidden">
+      <h1>📝 New Job Setup</h1>
+      <div class="job-id" id="newJobId"></div>
+      
+      <div class="form-group">
+        <label>Customer *</label>
+        <select id="customerSelect" onchange="checkNewCustomer()">
+          <option value="">Select customer...</option>
+          <option value="__new__">+ Add New Customer</option>
+        </select>
+      </div>
+      
+      <div id="newCustomerFields" class="hidden">
+        <div class="form-group">
+          <label>New Customer Name *</label>
+          <input type="text" id="newCustomerName" placeholder="St Mary's Church, Town">
+        </div>
+        <div class="form-group">
+          <label>Phone</label>
+          <input type="tel" id="newCustomerPhone" placeholder="01234 567890">
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <label>Project Reference</label>
+        <input type="text" id="projectRef" placeholder="e.g. Restoration 2025">
+      </div>
+      
+      <div class="form-group">
+        <label>Part Name (specific)</label>
+        <input type="text" id="partName" placeholder="e.g. Great Soundboard">
+      </div>
+      
+      <div class="form-group">
+        <label>Part Type (for analysis)</label>
+        <select id="partType">
+          <option value="">Select type...</option>
+        </select>
+      </div>
+      
+      <div class="form-group">
+        <label>Job Type</label>
+        <select id="jobType">
+          <option value="restoration">Restoration</option>
+          <option value="repair">Repair</option>
+          <option value="tuning">Tuning</option>
+          <option value="fault">Fault Visit</option>
+        </select>
+      </div>
+      
+      <button class="btn btn-start" onclick="createJob()">✓ Create Job & Start Timer</button>
+      <button class="btn btn-outline" onclick="createJobNoTimer()">Create Job (Don't Start Timer)</button>
+    </div>
+    
+    <!-- Job Tracker -->
+    <div id="tracker" class="hidden">
+      <h1>🎹 Organ Works</h1>
+      <div class="job-id" id="trackerJobId"></div>
+      
+      <div class="status-bar">
+        <h2 id="customerName">Loading...</h2>
+        <p id="projectInfo">-</p>
+        <p id="partInfo">-</p>
+      </div>
+      
+      <div class="timer-display" id="timerDisplay">00:00:00</div>
+      
+      <div id="startSection">
+        <button class="btn btn-start" onclick="startTimer()">▶ START</button>
+      </div>
+      
+      <div id="stopSection" class="hidden">
+        <button class="btn btn-stop" onclick="showStopModal()">⏹ STOP</button>
+      </div>
+      
+      <div class="totals">
+        <div class="totals-row">
+          <span class="totals-label">Total Hours</span>
+          <span class="totals-value hours" id="totalHours">0.00</span>
+        </div>
+        <div class="totals-row">
+          <span class="totals-label">Materials Cost</span>
+          <span class="totals-value cost" id="totalMaterials">£0.00</span>
+        </div>
+        <div class="totals-row">
+          <span class="totals-label">Sessions</span>
+          <span class="totals-value" id="sessionCount">0</span>
+        </div>
+      </div>
+      
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="showMaterialsModal()">+ Materials</button>
+        <button class="btn btn-secondary" onclick="showNotesModal()">+ Notes</button>
+      </div>
+      
+      <div class="history" id="historySection">
+        <h3>Recent Sessions</h3>
+        <div id="historyList">No sessions yet</div>
+      </div>
+      
+      <button class="btn btn-outline" onclick="showJobDetails()">View Full Job Details</button>
+    </div>
+    
+    <!-- Stop Timer Modal -->
+    <div id="stopModal" class="modal hidden">
+      <div class="modal-content">
+        <h2>⏹ Stop Timer</h2>
+        <div class="form-group">
+          <label>Session Notes (optional)</label>
+          <textarea id="stopNotes" rows="3" placeholder="What did you work on?"></textarea>
+        </div>
+        <button class="btn btn-stop" onclick="stopTimer()">Stop Timer</button>
+        <button class="btn btn-outline" onclick="hideStopModal()">Cancel</button>
+      </div>
+    </div>
+    
+    <!-- Materials Modal -->
+    <div id="materialsModal" class="modal hidden">
+      <div class="modal-content">
+        <h2>🔧 Add Materials</h2>
+        <div class="form-group">
+          <label>Description</label>
+          <input type="text" id="materialDesc" placeholder="e.g. Oak board, screws">
+        </div>
+        <div class="form-group">
+          <label>Cost (£)</label>
+          <input type="number" id="materialCost" placeholder="0.00" step="0.01" inputmode="decimal">
+        </div>
+        <button class="btn btn-secondary" onclick="addMaterial()">Add Material</button>
+        <button class="btn btn-outline" onclick="hideMaterialsModal()">Cancel</button>
+        
+        <div id="materialsList" class="materials-list hidden">
+          <h3 style="margin: 0 0 8px; font-size: 0.9rem; color: #888;">Materials Added</h3>
+          <div id="materialsListContent"></div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Notes Modal -->
+    <div id="notesModal" class="modal hidden">
+      <div class="modal-content">
+        <h2>📝 Add Notes</h2>
+        <div class="form-group">
+          <label>Job Notes</label>
+          <textarea id="jobNotes" rows="4" placeholder="Additional notes about this job..."></textarea>
+        </div>
+        <button class="btn btn-secondary" onclick="saveNotes()">Save Notes</button>
+        <button class="btn btn-outline" onclick="hideNotesModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let API_URL = localStorage.getItem('organWorks_apiUrl') || '';
+    let currentJobId = null;
+    let currentJob = null;
+    let timerInterval = null;
+    let timerStartTime = null;
+    let customers = [];
+    let partTypes = [];
+    
+    async function init() {
+      const params = new URLSearchParams(window.location.search);
+      currentJobId = params.get('job') || params.get('id');
+      
+      if (!API_URL) {
+        showScreen('config-screen');
+        return;
+      }
+      
+      if (!currentJobId) {
+        showScreen('no-job');
+        return;
+      }
+      
+      currentJobId = currentJobId.padStart(8, '0');
+      
+      try {
+        const job = await apiCall('getJob', { jobId: currentJobId });
+        
+        if (job) {
+          currentJob = job;
+          showTracker();
+        } else {
+          await loadSetupData();
+          showNewJobScreen();
+        }
+      } catch (err) {
+        console.error('Init error:', err);
+        showError('Failed to load job: ' + err.message);
+      }
+    }
+    
+    function saveConfig() {
+      const url = document.getElementById('apiUrlInput').value.trim();
+      if (!url) {
+        alert('Please enter your API URL');
+        return;
+      }
+      localStorage.setItem('organWorks_apiUrl', url);
+      API_URL = url;
+      init();
+    }
+    
+    async function apiCall(action, params = {}) {
+      const url = new URL(API_URL);
+      url.searchParams.set('action', action);
+      
+      Object.keys(params).forEach(key => {
+        if (typeof params[key] === 'object') {
+          url.searchParams.set(key, JSON.stringify(params[key]));
+        } else {
+          url.searchParams.set(key, params[key]);
+        }
+      });
+      
+      const response = await fetch(url.toString());
+      const data = await response.json();
+      
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      
+      return data;
+    }
+    
+    function showScreen(screenId) {
+      ['loading', 'config-screen', 'no-job', 'new-job', 'tracker'].forEach(id => {
+        document.getElementById(id).classList.add('hidden');
+      });
+      document.getElementById(screenId).classList.remove('hidden');
+    }
+    
+    function showError(message) {
+      showScreen('no-job');
+      document.querySelector('#no-job .error').innerHTML = `<strong>Error</strong><p>${message}</p>`;
+    }
+    
+    function loadManualJob() {
+      const jobId = document.getElementById('manualJobId').value.trim();
+      if (jobId) {
+        window.location.search = '?job=' + jobId.padStart(8, '0');
+      }
+    }
+    
+    async function loadSetupData() {
+      try {
+        [customers, partTypes] = await Promise.all([
+          apiCall('getCustomers'),
+          apiCall('getPartTypes')
+        ]);
+        
+        const select = document.getElementById('customerSelect');
+        customers.forEach(c => {
+          const option = document.createElement('option');
+          option.value = c.id;
+          option.textContent = c.name;
+          select.insertBefore(option, select.lastElementChild);
+        });
+        
+        const partSelect = document.getElementById('partType');
+        partTypes.forEach(pt => {
+          const option = document.createElement('option');
+          option.value = pt;
+          option.textContent = pt;
+          partSelect.appendChild(option);
+        });
+        
+      } catch (err) {
+        console.error('Failed to load setup data:', err);
+      }
+    }
+    
+    function showNewJobScreen() {
+      document.getElementById('newJobId').textContent = currentJobId;
+      showScreen('new-job');
+    }
+    
+    function checkNewCustomer() {
+      const select = document.getElementById('customerSelect');
+      const newFields = document.getElementById('newCustomerFields');
+      if (select.value === '__new__') {
+        newFields.classList.remove('hidden');
+      } else {
+        newFields.classList.add('hidden');
+      }
+    }
+    
+    async function createJob(startTimerAfter = true) {
+      const customerSelect = document.getElementById('customerSelect');
+      let customerId = customerSelect.value;
+      let customerName = '';
+      
+      if (!customerId) {
+        alert('Please select a customer');
+        return;
+      }
+      
+      if (customerId === '__new__') {
+        const newName = document.getElementById('newCustomerName').value.trim();
+        const newPhone = document.getElementById('newCustomerPhone').value.trim();
+        
+        if (!newName) {
+          alert('Please enter customer name');
+          return;
+        }
+        
+        try {
+          const result = await apiCall('addCustomer', { 
+            data: { name: newName, phone: newPhone }
+          });
+          customerId = result.id;
+          customerName = newName;
+        } catch (err) {
+          alert('Failed to create customer: ' + err.message);
+          return;
+        }
+      } else {
+        const customer = customers.find(c => c.id === customerId);
+        customerName = customer ? customer.name : '';
+      }
+      
+      const jobData = {
+        id: currentJobId,
+        customerId: customerId,
+        customerName: customerName,
+        projectRef: document.getElementById('projectRef').value.trim(),
+        partName: document.getElementById('partName').value.trim(),
+        partType: document.getElementById('partType').value,
+        jobType: document.getElementById('jobType').value,
+        status: 'active'
+      };
+      
+      try {
+        await apiCall('addJob', { data: jobData });
+        currentJob = jobData;
+        
+        if (startTimerAfter) {
+          await apiCall('startTimer', { jobId: currentJobId });
+        }
+        
+        showTracker();
+        
+        if (startTimerAfter) {
+          startLocalTimer();
+        }
+        
+      } catch (err) {
+        alert('Failed to create job: ' + err.message);
+      }
+    }
+    
+    function createJobNoTimer() {
+      createJob(false);
+    }
+    
+    async function showTracker() {
+      document.getElementById('trackerJobId').textContent = currentJobId;
+      document.getElementById('customerName').textContent = currentJob.customerName || 'Unknown Customer';
+      document.getElementById('projectInfo').textContent = currentJob.projectRef || '-';
+      document.getElementById('partInfo').textContent = 
+        (currentJob.partName ? currentJob.partName + ' • ' : '') + (currentJob.partType || '-');
+      
+      showScreen('tracker');
+      
+      await refreshJobSummary();
+      
+      const activeTimer = await apiCall('getActiveTimer', { jobId: currentJobId });
+      if (activeTimer) {
+        timerStartTime = new Date(activeTimer.startTime);
+        startLocalTimer();
+        document.getElementById('startSection').classList.add('hidden');
+        document.getElementById('stopSection').classList.remove('hidden');
+      }
+    }
+    
+    async function refreshJobSummary() {
+      try {
+        const summary = await apiCall('getJobSummary', { jobId: currentJobId });
+        
+        document.getElementById('totalHours').textContent = summary.totalHours.toFixed(2);
+        document.getElementById('totalMaterials').textContent = '£' + summary.totalMaterials.toFixed(2);
+        document.getElementById('sessionCount').textContent = summary.timeEntries.length;
+        
+        const historyHtml = summary.timeEntries.slice(-5).reverse().map(e => {
+          const start = new Date(e.startTime);
+          const duration = e.duration ? e.duration.toFixed(2) + ' hrs' : 'running...';
+          return `<div class="history-item">
+            <span>${start.toLocaleDateString('en-GB')} ${start.toLocaleTimeString('en-GB', {hour: '2-digit', minute:'2-digit'})}</span>
+            <span>${duration}</span>
+          </div>`;
+        }).join('');
+        
+        document.getElementById('historyList').innerHTML = historyHtml || 'No sessions yet';
+        
+      } catch (err) {
+        console.error('Failed to refresh summary:', err);
+      }
+    }
+    
+    async function startTimer() {
+      try {
+        await apiCall('startTimer', { jobId: currentJobId });
+        timerStartTime = new Date();
+        startLocalTimer();
+        
+        document.getElementById('startSection').classList.add('hidden');
+        document.getElementById('stopSection').classList.remove('hidden');
+        
+      } catch (err) {
+        alert('Failed to start timer: ' + err.message);
+      }
+    }
+    
+    function startLocalTimer() {
+      const display = document.getElementById('timerDisplay');
+      display.classList.remove('timer-stopped');
+      display.classList.add('timer-running');
+      
+      updateTimerDisplay();
+      timerInterval = setInterval(updateTimerDisplay, 1000);
+    }
+    
+    function updateTimerDisplay() {
+      if (!timerStartTime) return;
+      
+      const elapsed = Date.now() - timerStartTime.getTime();
+      const hours = Math.floor(elapsed / (1000 * 60 * 60));
+      const minutes = Math.floor((elapsed % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((elapsed % (1000 * 60)) / 1000);
+      
+      document.getElementById('timerDisplay').textContent = 
+        `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }
+    
+    function showStopModal() {
+      document.getElementById('stopModal').classList.remove('hidden');
+    }
+    
+    function hideStopModal() {
+      document.getElementById('stopModal').classList.add('hidden');
+    }
+    
+    async function stopTimer() {
+      const notes = document.getElementById('stopNotes').value.trim();
+      
+      try {
+        await apiCall('stopTimer', { jobId: currentJobId, notes: notes });
+        
+        clearInterval(timerInterval);
+        timerInterval = null;
+        timerStartTime = null;
+        
+        const display = document.getElementById('timerDisplay');
+        display.classList.remove('timer-running');
+        display.classList.add('timer-stopped');
+        
+        document.getElementById('startSection').classList.remove('hidden');
+        document.getElementById('stopSection').classList.add('hidden');
+        
+        hideStopModal();
+        document.getElementById('stopNotes').value = '';
+        
+        await refreshJobSummary();
+        
+      } catch (err) {
+        alert('Failed to stop timer: ' + err.message);
+      }
+    }
+    
+    function showMaterialsModal() {
+      document.getElementById('materialsModal').classList.remove('hidden');
+      loadMaterialsList();
+    }
+    
+    function hideMaterialsModal() {
+      document.getElementById('materialsModal').classList.add('hidden');
+    }
+    
+    async function loadMaterialsList() {
+      try {
+        const materials = await apiCall('getMaterials', { jobId: currentJobId });
+        
+        if (materials.length > 0) {
+          document.getElementById('materialsList').classList.remove('hidden');
+          document.getElementById('materialsListContent').innerHTML = materials.map(m => 
+            `<div class="material-item">
+              <span>${m.description}</span>
+              <span>£${parseFloat(m.cost).toFixed(2)}</span>
+            </div>`
+          ).join('');
+        }
+      } catch (err) {
+        console.error('Failed to load materials:', err);
+      }
+    }
+    
+    async function addMaterial() {
+      const desc = document.getElementById('materialDesc').value.trim();
+      const cost = parseFloat(document.getElementById('materialCost').value) || 0;
+      
+      if (!desc) {
+        alert('Please enter a description');
+        return;
+      }
+      
+      try {
+        await apiCall('addMaterial', { 
+          data: { jobId: currentJobId, description: desc, cost: cost }
+        });
+        
+        document.getElementById('materialDesc').value = '';
+        document.getElementById('materialCost').value = '';
+        
+        await loadMaterialsList();
+        await refreshJobSummary();
+        
+      } catch (err) {
+        alert('Failed to add material: ' + err.message);
+      }
+    }
+    
+    function showNotesModal() {
+      document.getElementById('notesModal').classList.remove('hidden');
+      document.getElementById('jobNotes').value = currentJob.notes || '';
+    }
+    
+    function hideNotesModal() {
+      document.getElementById('notesModal').classList.add('hidden');
+    }
+    
+    async function saveNotes() {
+      const notes = document.getElementById('jobNotes').value.trim();
+      
+      try {
+        await apiCall('updateJob', { 
+          data: { id: currentJobId, notes: notes }
+        });
+        
+        currentJob.notes = notes;
+        hideNotesModal();
+        
+      } catch (err) {
+        alert('Failed to save notes: ' + err.message);
+      }
+    }
+    
+    async function showJobDetails() {
+      try {
+        const summary = await apiCall('getJobSummary', { jobId: currentJobId });
+        
+        let details = `JOB: ${currentJobId}\n`;
+        details += `Customer: ${currentJob.customerName}\n`;
+        details += `Project: ${currentJob.projectRef || '-'}\n`;
+        details += `Part: ${currentJob.partName || '-'} (${currentJob.partType || '-'})\n`;
+        details += `\nTOTALS:\n`;
+        details += `Hours: ${summary.totalHours.toFixed(2)}\n`;
+        details += `Materials: £${summary.totalMaterials.toFixed(2)}\n`;
+        details += `\nSESSIONS: ${summary.timeEntries.length}\n`;
+        
+        summary.timeEntries.forEach(e => {
+          const start = new Date(e.startTime);
+          const duration = e.duration ? e.duration.toFixed(2) : '?';
+          details += `- ${start.toLocaleDateString('en-GB')}: ${duration} hrs`;
+          if (e.notes) details += ` (${e.notes})`;
+          details += '\n';
+        });
+        
+        if (summary.materials.length > 0) {
+          details += `\nMATERIALS:\n`;
+          summary.materials.forEach(m => {
+            details += `- ${m.description}: £${parseFloat(m.cost).toFixed(2)}\n`;
+          });
+        }
+        
+        alert(details);
+        
+      } catch (err) {
+        alert('Failed to load details: ' + err.message);
+      }
+    }
+    
+    init();
+  </script>
+</body>
+</html>
