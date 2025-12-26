@@ -404,7 +404,17 @@
       
       <div class="form-group">
         <label>Project Reference</label>
-        <input type="text" id="projectRef" placeholder="e.g. Restoration 2025">
+        <select id="projectSelect" onchange="checkNewProject()">
+          <option value="">Select project...</option>
+          <option value="__new__">+ New Project</option>
+        </select>
+      </div>
+      
+      <div id="newProjectFields" class="hidden">
+        <div class="form-group">
+          <label>New Project Name *</label>
+          <input type="text" id="newProjectName" placeholder="e.g. Restoration 2025">
+        </div>
       </div>
       
       <div class="form-group">
@@ -664,6 +674,47 @@
     function checkNewCustomer() {
       const select = document.getElementById('customerSelect');
       const newFields = document.getElementById('newCustomerFields');
+      const projectSelect = document.getElementById('projectSelect');
+      
+      // Reset project dropdown
+      projectSelect.innerHTML = '<option value="">Select project...</option><option value="__new__">+ New Project</option>';
+      document.getElementById('newProjectFields').classList.add('hidden');
+      
+      if (select.value === '__new__') {
+        newFields.classList.remove('hidden');
+      } else {
+        newFields.classList.add('hidden');
+        
+        // Load existing projects for this customer
+        if (select.value) {
+          loadCustomerProjects(select.value);
+        }
+      }
+    }
+    
+    async function loadCustomerProjects(customerId) {
+      try {
+        const jobs = await apiCall('getJobs', { customerId: customerId });
+        const projectSelect = document.getElementById('projectSelect');
+        
+        // Get unique project references
+        const projects = [...new Set(jobs.map(j => j.projectRef).filter(p => p))];
+        
+        // Add to dropdown (before the "+ New" option)
+        projects.forEach(project => {
+          const option = document.createElement('option');
+          option.value = project;
+          option.textContent = project;
+          projectSelect.insertBefore(option, projectSelect.lastElementChild);
+        });
+      } catch (err) {
+        console.error('Failed to load projects:', err);
+      }
+    }
+    
+    function checkNewProject() {
+      const select = document.getElementById('projectSelect');
+      const newFields = document.getElementById('newProjectFields');
       if (select.value === '__new__') {
         newFields.classList.remove('hidden');
       } else {
@@ -705,11 +756,20 @@
         customerName = customer ? customer.name : '';
       }
       
+      // Get project reference
+      const projectSelect = document.getElementById('projectSelect');
+      let projectRef = projectSelect.value;
+      if (projectRef === '__new__') {
+        projectRef = document.getElementById('newProjectName').value.trim();
+      } else if (projectRef === '') {
+        projectRef = '';
+      }
+      
       const jobData = {
         id: currentJobId,
         customerId: customerId,
         customerName: customerName,
-        projectRef: document.getElementById('projectRef').value.trim(),
+        projectRef: projectRef,
         partName: document.getElementById('partName').value.trim(),
         partType: document.getElementById('partType').value,
         jobType: document.getElementById('jobType').value,
