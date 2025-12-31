@@ -265,26 +265,122 @@
       font-weight: bold;
     }
     
-    .quick-pick {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
+    .material-search-wrapper {
+      position: relative;
       margin: 10px 0;
     }
     
-    .quick-pick-btn {
-      padding: 8px 12px;
-      background: #1e3a5f;
-      border: 1px solid #3b82f6;
-      border-radius: 20px;
-      color: #93c5fd;
-      font-size: 12px;
-      cursor: pointer;
+    .search-row {
+      display: flex;
+      gap: 8px;
     }
     
-    .quick-pick-btn:active {
+    .material-search {
+      flex: 1;
+      padding: 12px;
+      border: 2px solid #333;
+      border-radius: 8px;
+      background: #0f172a;
+      color: #fff;
+      font-size: 16px;
+    }
+    
+    .qty-input {
+      width: 60px;
+      padding: 12px;
+      border: 2px solid #333;
+      border-radius: 8px;
+      background: #0f172a;
+      color: #fff;
+      font-size: 16px;
+      text-align: center;
+    }
+    
+    .material-dropdown {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background: #1e293b;
+      border: 2px solid #3b82f6;
+      border-top: none;
+      border-radius: 0 0 8px 8px;
+      max-height: 200px;
+      overflow-y: auto;
+      z-index: 100;
+    }
+    
+    .material-dropdown.show {
+      display: block;
+    }
+    
+    .material-option {
+      padding: 12px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      border-bottom: 1px solid #333;
+    }
+    
+    .material-option:hover {
+      background: #3b82f6;
+    }
+    
+    .material-option .name {
+      color: #fff;
+    }
+    
+    .material-option .price {
+      color: #4ade80;
+      font-weight: bold;
+    }
+    
+    .add-material-manual {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    
+    .manual-label {
+      color: #666;
+      font-size: 12px;
+      width: 100%;
+      margin-bottom: 4px;
+    }
+    
+    .add-material-manual input {
+      padding: 10px;
+      border: 2px solid #333;
+      border-radius: 8px;
+      background: #0f172a;
+      color: #fff;
+      font-size: 14px;
+    }
+    
+    .add-material-manual input.desc-input {
+      flex: 1;
+    }
+    
+    .add-material-manual input.cost-input {
+      width: 80px;
+    }
+    
+    .add-material-manual input.qty-input-manual {
+      width: 50px;
+      text-align: center;
+    }
+    
+    .add-material-manual button {
+      padding: 10px 16px;
       background: #3b82f6;
       color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: bold;
     }
     
     .config-panel {
@@ -570,33 +666,41 @@
         // Materials section (show when active or completed)
         if (isActive || isCompleted) {
           const materials = bookingMaterials[booking.id] || [];
-          const materialsTotal = materials.reduce((sum, m) => sum + (parseFloat(m.cost) || 0), 0);
+          const materialsTotal = materials.reduce((sum, m) => sum + (parseFloat(m.cost) * (m.quantity || 1)), 0);
           
           html += `<div class="materials-section">`;
           html += `<div class="materials-title">🔧 Materials / Parts</div>`;
           
           // List existing materials
           materials.forEach((mat, idx) => {
+            const qty = mat.quantity || 1;
+            const lineTotal = (parseFloat(mat.cost) * qty).toFixed(2);
             html += `<div class="material-item">
-              <span class="desc">${mat.description}</span>
-              <span class="cost">£${parseFloat(mat.cost).toFixed(2)}</span>
+              <span class="desc">${mat.description} ${qty > 1 ? `×${qty}` : ''}</span>
+              <span class="cost">£${lineTotal}</span>
               <button class="remove-btn" onclick="removeMaterial('${booking.id}', ${idx})">✕</button>
             </div>`;
           });
           
-          // Quick-pick buttons
-          if (materialsList.length > 0) {
-            html += `<div class="quick-pick">`;
-            materialsList.forEach(mat => {
-              html += `<button class="quick-pick-btn" onclick="quickAddMaterial('${booking.id}', '${mat.name.replace(/'/g, "\\'")}', ${mat.price})">${mat.name} £${parseFloat(mat.price).toFixed(2)}</button>`;
-            });
-            html += `</div>`;
-          }
+          // Searchable dropdown with quantity
+          html += `<div class="material-search-wrapper">
+            <div class="search-row">
+              <input type="text" class="material-search" id="mat-search-${booking.id}" 
+                     placeholder="Search materials..." 
+                     oninput="filterMaterials('${booking.id}')"
+                     onfocus="showMaterialDropdown('${booking.id}')"
+                     autocomplete="off">
+              <input type="number" class="qty-input" id="mat-qty-${booking.id}" value="1" min="1" placeholder="Qty">
+            </div>
+            <div class="material-dropdown" id="mat-dropdown-${booking.id}"></div>
+          </div>`;
           
-          // Add material form (manual)
-          html += `<div class="add-material">
-            <input type="text" class="desc-input" id="mat-desc-${booking.id}" placeholder="Other...">
+          // Manual add (for items not in list)
+          html += `<div class="add-material-manual">
+            <span class="manual-label">Not listed?</span>
+            <input type="text" class="desc-input" id="mat-desc-${booking.id}" placeholder="Description">
             <input type="number" class="cost-input" id="mat-cost-${booking.id}" placeholder="£">
+            <input type="number" class="qty-input-manual" id="mat-qty-manual-${booking.id}" value="1" min="1" placeholder="Qty">
             <button onclick="addMaterial('${booking.id}')">+</button>
           </div>`;
           
@@ -700,9 +804,11 @@
     async function addMaterial(bookingId) {
       const descInput = document.getElementById(`mat-desc-${bookingId}`);
       const costInput = document.getElementById(`mat-cost-${bookingId}`);
+      const qtyInput = document.getElementById(`mat-qty-manual-${bookingId}`);
       
       const description = descInput.value.trim();
       const cost = parseFloat(costInput.value);
+      const quantity = parseInt(qtyInput?.value) || 1;
       
       if (!description || isNaN(cost) || cost <= 0) {
         alert('Please enter description and cost');
@@ -713,11 +819,12 @@
       if (!bookingMaterials[bookingId]) {
         bookingMaterials[bookingId] = [];
       }
-      bookingMaterials[bookingId].push({ description, cost });
+      bookingMaterials[bookingId].push({ description, cost, quantity });
       
       // Clear inputs
       descInput.value = '';
       costInput.value = '';
+      if (qtyInput) qtyInput.value = '1';
       
       // Save to database
       await saveMaterials(bookingId);
@@ -737,6 +844,71 @@
       
       renderBookings();
     }
+    
+    function showMaterialDropdown(bookingId) {
+      filterMaterials(bookingId);
+      const dropdown = document.getElementById(`mat-dropdown-${bookingId}`);
+      if (dropdown) dropdown.classList.add('show');
+    }
+    
+    function hideMaterialDropdown(bookingId) {
+      const dropdown = document.getElementById(`mat-dropdown-${bookingId}`);
+      if (dropdown) dropdown.classList.remove('show');
+    }
+    
+    function filterMaterials(bookingId) {
+      const searchInput = document.getElementById(`mat-search-${bookingId}`);
+      const dropdown = document.getElementById(`mat-dropdown-${bookingId}`);
+      if (!searchInput || !dropdown) return;
+      
+      const query = searchInput.value.toLowerCase();
+      const filtered = materialsList.filter(m => 
+        m.name.toLowerCase().includes(query)
+      );
+      
+      if (filtered.length === 0) {
+        dropdown.innerHTML = '<div class="material-option"><span class="name">No matches</span></div>';
+      } else {
+        dropdown.innerHTML = filtered.map(mat => `
+          <div class="material-option" onclick="selectMaterial('${bookingId}', '${mat.name.replace(/'/g, "\\'")}', ${mat.price})">
+            <span class="name">${mat.name}</span>
+            <span class="price">£${parseFloat(mat.price).toFixed(2)}</span>
+          </div>
+        `).join('');
+      }
+      
+      dropdown.classList.add('show');
+    }
+    
+    async function selectMaterial(bookingId, name, price) {
+      // Get quantity
+      const qtyInput = document.getElementById(`mat-qty-${bookingId}`);
+      const quantity = parseInt(qtyInput?.value) || 1;
+      
+      // Clear search and reset qty
+      const searchInput = document.getElementById(`mat-search-${bookingId}`);
+      if (searchInput) searchInput.value = '';
+      if (qtyInput) qtyInput.value = '1';
+      hideMaterialDropdown(bookingId);
+      
+      // Add material with quantity
+      if (!bookingMaterials[bookingId]) {
+        bookingMaterials[bookingId] = [];
+      }
+      bookingMaterials[bookingId].push({ description: name, cost: price, quantity: quantity });
+      
+      // Save to database
+      await saveMaterials(bookingId);
+      
+      renderBookings();
+    }
+    
+    // Close dropdowns when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.material-search-wrapper')) {
+        document.querySelectorAll('.material-dropdown').forEach(d => d.classList.remove('show'));
+      }
+    });
     
     async function removeMaterial(bookingId, index) {
       if (!bookingMaterials[bookingId]) return;
