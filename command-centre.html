@@ -145,6 +145,11 @@ const CommandCentre = () => {
   const [newTicketCustomer, setNewTicketCustomer] = useState('');
   const [newTicketDescription, setNewTicketDescription] = useState('');
   const [customerSearch, setCustomerSearch] = useState('');
+  
+  // Invoice calculator
+  const [showInvoiceCalc, setShowInvoiceCalc] = useState(null); // booking object or null
+  const [selectedBand, setSelectedBand] = useState(null);
+  const [pricing, setPricing] = useState({ timeBands: [], distanceBands: [] });
 
   // Current year for planner
   const currentYear = currentDate.getFullYear();
@@ -187,6 +192,7 @@ const CommandCentre = () => {
       setBookings(normalizedBookings);
       setDaysOff((data.daysOff || []).map(d => d.date));
       setTickets(data.tickets || []);
+      setPricing(data.pricing || { timeBands: [], distanceBands: [] });
       
     } catch (err) {
       console.error('Failed to load data:', err);
@@ -972,10 +978,17 @@ const CommandCentre = () => {
                     )}
                     {booking.status === 'completed' && (
                       <button
-                        onClick={() => updateBookingStatus(booking.id, 'invoiced')}
+                        onClick={() => {
+                          const customer = getCustomerById(booking.customerId);
+                          const distance = customer?.distance || 0;
+                          const actualHours = parseFloat(booking.actualHours) || 0;
+                          const suggestedBand = Math.max(4, Math.ceil(actualHours));
+                          setSelectedBand(suggestedBand);
+                          setShowInvoiceCalc({ ...booking, distance, actualHours });
+                        }}
                         className="text-sm bg-amber-200 px-4 py-2 rounded-lg hover:bg-amber-300 touch-target"
                       >
-                        📧 Invoiced
+                        📧 Invoice
                       </button>
                     )}
                     {booking.status === 'invoiced' && (
@@ -1341,6 +1354,168 @@ const CommandCentre = () => {
 
       {view === 'customers' && <CustomerListView />}
       {view === 'customerDetail' && selectedCustomer && <CustomerDetailView />}
+      
+      {/* Invoice Calculator Modal */}
+      {showInvoiceCalc && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+            <div className="flex justify-between items-start mb-4">
+              <div>
+                <h2 className="text-2xl font-bold">💰 Invoice Calculator</h2>
+                <p className="text-gray-600">{getCustomerById(showInvoiceCalc.customerId)?.name}</p>
+              </div>
+              <button 
+                onClick={() => setShowInvoiceCalc(null)}
+                className="text-2xl text-gray-400 hover:text-gray-600"
+              >×</button>
+            </div>
+            
+            {/* Actual time worked */}
+            <div className="bg-gray-100 rounded-lg p-4 mb-4">
+              <div className="text-sm text-gray-600">Time on site</div>
+              <div className="text-2xl font-bold">
+                {showInvoiceCalc.actualHours ? `${Math.floor(showInvoiceCalc.actualHours)}h ${Math.round((showInvoiceCalc.actualHours % 1) * 60)}m` : 'Not recorded'}
+              </div>
+              <div className="text-sm text-gray-500">Service: {getJobTypeLabel(showInvoiceCalc.type || showInvoiceCalc.serviceType)}</div>
+            </div>
+            
+            {/* Time band selection */}
+            <div className="mb-4">
+              <div className="text-sm text-gray-600 mb-2">Select time band:</div>
+              <div className="grid grid-cols-5 gap-2">
+                {pricing.timeBands.map(band => {
+                  const serviceType = showInvoiceCalc.serviceType || showInvoiceCalc.type || 'TSC';
+                  const price = band[serviceType] || band.TSC || 0;
+                  const isSelected = selectedBand === band.hours;
+                  const isSuggested = Math.max(4, Math.ceil(showInvoiceCalc.actualHours || 0)) === band.hours;
+                  
+                  return (
+                    <button
+                      key={band.hours}
+                      onClick={() => setSelectedBand(band.hours)}
+                      className={`p-3 rounded-lg text-center border-2 transition-all ${
+                        isSelected 
+                          ? 'bg-blue-500 text-white border-blue-500' 
+                          : isSuggested
+                            ? 'bg-blue-100 border-blue-300'
+                            : 'bg-white border-gray-200 hover:border-blue-300'
+                      }`}
+                    >
+                      <div className="font-bold">{band.hours}h</div>
+                      <div className="text-sm">£{price}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            
+            {/* Distance premium */}
+            <div className="bg-gray-100 rounded-lg p-4 mb-4">
+              <div className="flex justify-between">
+                <span className="text-gray-600">Distance</span>
+                <span>{showInvoiceCalc.distance || 0} miles</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Premium</span>
+                <span className="font-bold">
+                  +£{pricing.distanceBands.find(d => 
+                    (showInvoiceCalc.distance || 0) >= d.minMiles && 
+                    (showInvoiceCalc.distance || 0) <= d.maxMiles
+                  )?.premium || 0}
+                </span>
+              </div>
+            </div>
+            
+            {/* Total */}
+            {(() => {
+              const serviceType = showInvoiceCalc.serviceType || showInvoiceCalc.type || 'TSC';
+              const band = pricing.timeBands.find(b => b.hours === selectedBand);
+              const serviceCharge = band ? (band[serviceType] || band.TSC || 0) : 0;
+              const distancePremium = pricing.distanceBands.find(d => 
+                (showInvoiceCalc.distance || 0) >= d.minMiles && 
+                (showInvoiceCalc.distance || 0) <= d.maxMiles
+              )?.premium || 0;
+              const total = serviceCharge + distancePremium;
+              
+              return (
+                <div className="border-t-2 pt-4 mb-4">
+                  <div className="flex justify-between text-lg">
+                    <span>Service ({selectedBand}h)</span>
+                    <span>£{serviceCharge}</span>
+                  </div>
+                  <div className="flex justify-between text-lg">
+                    <span>Distance</span>
+                    <span>+£{distancePremium}</span>
+                  </div>
+                  <div className="flex justify-between text-2xl font-bold mt-2 pt-2 border-t">
+                    <span>Total</span>
+                    <span className="text-green-600">£{total}</span>
+                  </div>
+                </div>
+              );
+            })()}
+            
+            {/* Action buttons */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowInvoiceCalc(null)}
+                className="flex-1 py-3 bg-gray-200 rounded-lg font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const serviceType = showInvoiceCalc.serviceType || showInvoiceCalc.type || 'TSC';
+                  const band = pricing.timeBands.find(b => b.hours === selectedBand);
+                  const serviceCharge = band ? (band[serviceType] || band.TSC || 0) : 0;
+                  const distancePremium = pricing.distanceBands.find(d => 
+                    (showInvoiceCalc.distance || 0) >= d.minMiles && 
+                    (showInvoiceCalc.distance || 0) <= d.maxMiles
+                  )?.premium || 0;
+                  const total = serviceCharge + distancePremium;
+                  
+                  // Update booking with price and status
+                  setSaving(true);
+                  try {
+                    await apiCall('updateBooking', {
+                      data: {
+                        id: showInvoiceCalc.id,
+                        price: total,
+                        status: 'invoiced',
+                        invoiceDate: new Date().toISOString().split('T')[0]
+                      }
+                    });
+                    
+                    setBookings(bookings.map(b => 
+                      b.id === showInvoiceCalc.id 
+                        ? { ...b, price: total, status: 'invoiced', invoiceDate: new Date().toISOString().split('T')[0] }
+                        : b
+                    ));
+                    setShowInvoiceCalc(null);
+                    setLastSaved(new Date());
+                  } catch (err) {
+                    alert('Failed to update: ' + err.message);
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+                className="flex-1 py-3 bg-green-500 text-white rounded-lg font-bold text-lg"
+              >
+                ✓ Confirm £{(() => {
+                  const serviceType = showInvoiceCalc.serviceType || showInvoiceCalc.type || 'TSC';
+                  const band = pricing.timeBands.find(b => b.hours === selectedBand);
+                  const serviceCharge = band ? (band[serviceType] || band.TSC || 0) : 0;
+                  const distancePremium = pricing.distanceBands.find(d => 
+                    (showInvoiceCalc.distance || 0) >= d.minMiles && 
+                    (showInvoiceCalc.distance || 0) <= d.maxMiles
+                  )?.premium || 0;
+                  return serviceCharge + distancePremium;
+                })()}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
