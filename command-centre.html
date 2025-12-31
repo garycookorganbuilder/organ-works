@@ -138,7 +138,7 @@ const CommandCentre = () => {
   const [selectedDay, setSelectedDay] = useState(null);
   const [view, setView] = useState('planner');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
-  const [bookingType, setBookingType] = useState('tuning_full');
+  const [bookingType, setBookingType] = useState('OTS');
   const [customQuote, setCustomQuote] = useState('');
   const [jobNotes, setJobNotes] = useState('');
   const [showAddTicket, setShowAddTicket] = useState(false);
@@ -232,14 +232,24 @@ const CommandCentre = () => {
   };
 
   const getJobTypeLabel = (type) => {
+    // New service types
+    if (type === 'OTS') return 'On-site (with helper)';
+    if (type === 'TSC') return 'Solo Site Work';
+    if (type === 'WS') return 'Workshop';
+    // Legacy types
     if (type === 'tuning_full') return 'Tuning (Full Day)';
     if (type === 'tuning_half') return 'Tuning (Half Day)';
     if (type === 'fault') return 'Fault Visit';
     if (type === 'big') return 'Big Job';
-    return type;
+    return type || 'Visit';
   };
 
   const getJobTypeColor = (type) => {
+    // New service types
+    if (type === 'OTS') return 'blue';
+    if (type === 'TSC') return 'green';
+    if (type === 'WS') return 'purple';
+    // Legacy types for existing bookings
     if (type?.startsWith('tuning')) return 'blue';
     if (type === 'fault') return 'orange';
     if (type === 'big') return 'red';
@@ -298,15 +308,14 @@ const CommandCentre = () => {
   const addBooking = async (date, customerId, type, price, notes, ticket = null) => {
     setSaving(true);
     try {
-      const customer = getCustomerById(customerId);
-      const finalPrice = price || getJobPrice(type, customer);
-      
+      // Price is calculated later based on actual hours - store 0 for now
       const result = await apiCall('addBooking', {
         data: {
           date,
           customerId,
           type,
-          price: finalPrice,
+          serviceType: type, // OTS, TSC, WS
+          price: price || 0,
           status: 'scheduled',
           notes: notes || ''
         }
@@ -318,7 +327,8 @@ const CommandCentre = () => {
         date,
         customerId,
         type,
-        price: finalPrice,
+        serviceType: type,
+        price: price || 0,
         status: 'scheduled',
         notes: notes || ''
       }]);
@@ -407,7 +417,7 @@ const CommandCentre = () => {
     if (isDayOff(dateStr)) return;
     
     if (selectedCustomerToBook) {
-      const price = customQuote ? parseFloat(customQuote) : getJobPrice(bookingType, selectedCustomerToBook);
+      const price = customQuote ? parseFloat(customQuote) : 0; // Price calculated later from hours
       addBooking(dateStr, selectedCustomerToBook.id, bookingType, price, jobNotes, selectedTicketToBook);
     } else {
       setSelectedDay(dateStr);
@@ -456,7 +466,7 @@ const CommandCentre = () => {
     const customer = getCustomerById(ticket.customerId);
     setSelectedCustomerToBook(customer);
     setSelectedTicketToBook(ticket);
-    setBookingType('fault');
+    setBookingType('TSC');
     setJobNotes(ticket.description);
   };
 
@@ -589,18 +599,23 @@ const CommandCentre = () => {
             <div className="text-sm text-orange-600 mt-1">"{selectedTicketToBook.description}"</div>
           )}
           
-          <div className="grid grid-cols-2 gap-2 mt-3">
-            {['tuning_full', 'tuning_half', 'fault', 'big'].map(type => (
+          <div className="grid grid-cols-3 gap-2 mt-3">
+            {[
+              { type: 'OTS', label: 'OTS', desc: 'With helper' },
+              { type: 'TSC', label: 'Solo', desc: 'Just me' },
+              { type: 'WS', label: 'Workshop', desc: 'No travel' }
+            ].map(item => (
               <button
-                key={type}
-                onClick={() => setBookingType(type)}
+                key={item.type}
+                onClick={() => setBookingType(item.type)}
                 className={`py-3 rounded-lg text-sm font-medium touch-target ${
-                  bookingType === type 
-                    ? type === 'big' ? 'bg-red-500 text-white' : type === 'fault' ? 'bg-orange-400 text-white' : 'bg-blue-500 text-white'
+                  bookingType === item.type 
+                    ? 'bg-blue-500 text-white'
                     : 'bg-gray-200'
                 }`}
               >
-                {getJobTypeLabel(type).split(' ')[0]}
+                {item.label}<br/>
+                <span className="text-xs opacity-75">{item.desc}</span>
               </button>
             ))}
           </div>
@@ -761,7 +776,7 @@ const CommandCentre = () => {
               key={idx}
               onClick={() => {
                 setSelectedCustomerToBook(item.customer);
-                setBookingType('tuning_full');
+                setBookingType('OTS');
                 setCustomQuote('');
                 setJobNotes('');
               }}
@@ -843,6 +858,8 @@ const CommandCentre = () => {
                 if (!isWork) cellClass += 'bg-gray-100 dim-when-booking';
                 else if (isOff) cellClass += 'bg-yellow-200 dim-when-booking';
                 else if (color === 'blue') cellClass += 'bg-blue-500 text-white';
+                else if (color === 'green') cellClass += 'bg-emerald-500 text-white';
+                else if (color === 'purple') cellClass += 'bg-purple-500 text-white';
                 else if (color === 'orange') cellClass += 'bg-orange-400 text-white';
                 else if (color === 'red') cellClass += 'bg-red-500 text-white';
                 else cellClass += isSelecting ? 'bg-green-200 hover:bg-green-300' : 'bg-green-50 hover:bg-green-100';
@@ -920,6 +937,8 @@ const CommandCentre = () => {
                   key={booking.id}
                   className={`p-4 rounded-lg ${
                     color === 'blue' ? 'bg-blue-100 border-l-4 border-blue-500' :
+                    color === 'green' ? 'bg-emerald-100 border-l-4 border-emerald-500' :
+                    color === 'purple' ? 'bg-purple-100 border-l-4 border-purple-500' :
                     color === 'orange' ? 'bg-orange-100 border-l-4 border-orange-500' :
                     'bg-red-100 border-l-4 border-red-500'
                   }`}
@@ -1195,6 +1214,8 @@ const CommandCentre = () => {
                     key={booking.id}
                     className={`p-4 rounded-lg border-l-4 ${
                       color === 'blue' ? 'bg-blue-50 border-blue-500' :
+                      color === 'green' ? 'bg-emerald-50 border-emerald-500' :
+                      color === 'purple' ? 'bg-purple-50 border-purple-500' :
                       color === 'orange' ? 'bg-orange-50 border-orange-500' :
                       'bg-red-50 border-red-500'
                     }`}
