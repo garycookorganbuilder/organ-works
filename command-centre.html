@@ -127,6 +127,7 @@ const CommandCentre = () => {
   
   const [customers, setCustomers] = useState([]);
   const [contacts, setContacts] = useState([]);
+  const [projects, setProjects] = useState([]);
   const [bookings, setBookings] = useState([]);
   const [daysOff, setDaysOff] = useState([]);
   const [tickets, setTickets] = useState([]);
@@ -202,6 +203,7 @@ const CommandCentre = () => {
       
       setCustomers(parsedCustomers);
       setContacts(data.contacts || []);
+      setProjects(data.projects || []);
       // Normalize booking dates to YYYY-MM-DD format
       const normalizedBookings = (data.bookings || []).map(b => ({
         ...b,
@@ -328,32 +330,22 @@ const CommandCentre = () => {
 
   const jobsDue = getJobsDue();
 
-  // Get active projects (grouped from project bookings)
+  // Get active projects with allocated days count
   const getActiveProjects = () => {
-    const projectMap = {};
-    bookings
-      .filter(b => b.type === 'project')
-      .forEach(b => {
-        if (!projectMap[b.projectId]) {
-          // Try to extract estimatedDays from notes like "Est: 60 days"
-          let estDays = b.estimatedDays;
-          if (!estDays && b.notes) {
-            const match = b.notes.match(/Est:\s*(\d+)\s*days/i);
-            if (match) estDays = parseInt(match[1]);
-          }
-          
-          projectMap[b.projectId] = {
-            id: b.projectId,
-            name: b.projectName,
-            customerId: b.customerId,
-            customerName: customers.find(c => c.id === b.customerId)?.name || 'Unknown',
-            estimatedDays: estDays || null,
-            days: []
-          };
-        }
-        projectMap[b.projectId].days.push(b.date);
+    return projects
+      .filter(p => p.status === 'active')
+      .map(p => {
+        // Count allocated days from bookings
+        const allocatedDays = bookings
+          .filter(b => b.type === 'project' && b.projectId === p.id)
+          .map(b => b.date);
+        
+        return {
+          ...p,
+          customerName: customers.find(c => c.id === p.customerId)?.name || 'Unknown',
+          days: allocatedDays
+        };
       });
-    return Object.values(projectMap);
   };
   
   const activeProjects = getActiveProjects();
@@ -478,19 +470,44 @@ const CommandCentre = () => {
   const createProject = async () => {
     if (!newProjectName || !newProjectCustomer) return;
     
-    const projectId = 'PRJ' + Date.now();
-    setAllocatingProject({
-      id: projectId,
-      name: newProjectName,
-      customerId: newProjectCustomer.id,
-      customerName: newProjectCustomer.name,
-      estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : null
-    });
-    setShowNewProject(false);
-    setNewProjectName('');
-    setNewProjectCustomer(null);
-    setProjectCustomerSearch('');
-    setNewProjectEstDays('');
+    setSaving(true);
+    try {
+      // Save project to database
+      const result = await apiCall('addProject', {
+        data: {
+          customerId: newProjectCustomer.id,
+          name: newProjectName,
+          estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : '',
+          status: 'active'
+        }
+      });
+      
+      const newProject = {
+        id: result.id,
+        name: newProjectName,
+        customerId: newProjectCustomer.id,
+        customerName: newProjectCustomer.name,
+        estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : null,
+        status: 'active',
+        days: []
+      };
+      
+      // Add to local state
+      setProjects([...projects, newProject]);
+      
+      // Start allocating
+      setAllocatingProject(newProject);
+      setShowNewProject(false);
+      setNewProjectName('');
+      setNewProjectCustomer(null);
+      setProjectCustomerSearch('');
+      setNewProjectEstDays('');
+      setLastSaved(new Date());
+    } catch (err) {
+      alert('Failed to create project: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const toggleProjectDay = async (dateStr) => {
