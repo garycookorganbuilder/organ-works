@@ -575,8 +575,76 @@ const CommandCentre = () => {
   // JOBS DUE PANEL (Left sidebar)
   // ============================================================
   
-  const JobsDuePanel = () => (
+  const jobsDuePanelContent = (
     <div className="w-80 bg-white rounded-lg shadow-xl p-4 flex flex-col h-full no-print">
+      
+      {/* BOOKING CONFIRMATION - Always at top when active */}
+      {selectedCustomerToBook && (
+        <div className={`border-2 rounded-lg p-4 mb-3 booking-highlight ${selectedTicketToBook ? 'bg-orange-100 border-orange-500' : 'bg-green-100 border-green-500'}`}>
+          <div className={`font-bold text-lg ${selectedTicketToBook ? 'text-orange-800' : 'text-green-800'}`}>
+            {selectedTicketToBook ? '🔧 Booking Fault:' : '📍 Booking:'}
+          </div>
+          <div className={`font-medium text-lg ${selectedTicketToBook ? 'text-orange-700' : 'text-green-700'}`}>{selectedCustomerToBook.name}</div>
+          {selectedTicketToBook && (
+            <div className="text-sm text-orange-600 mt-1">"{selectedTicketToBook.description}"</div>
+          )}
+          
+          <div className="grid grid-cols-2 gap-2 mt-3">
+            {['tuning_full', 'tuning_half', 'fault', 'big'].map(type => (
+              <button
+                key={type}
+                onClick={() => setBookingType(type)}
+                className={`py-3 rounded-lg text-sm font-medium touch-target ${
+                  bookingType === type 
+                    ? type === 'big' ? 'bg-red-500 text-white' : type === 'fault' ? 'bg-orange-400 text-white' : 'bg-blue-500 text-white'
+                    : 'bg-gray-200'
+                }`}
+              >
+                {getJobTypeLabel(type).split(' ')[0]}
+              </button>
+            ))}
+          </div>
+          
+          {bookingType === 'big' && (
+            <div className="mt-3">
+              <label className="text-sm text-gray-600">Quote amount:</label>
+              <div className="relative">
+                <span className="absolute left-3 top-3 text-gray-500">£</span>
+                <input
+                  type="number"
+                  value={customQuote}
+                  onChange={(e) => setCustomQuote(e.target.value)}
+                  className="w-full p-3 pl-7 border rounded-lg"
+                  placeholder="Enter quote"
+                />
+              </div>
+            </div>
+          )}
+          
+          <div className="mt-3">
+            <label className="text-sm text-gray-600">Job notes (optional):</label>
+            <input
+              type="text"
+              value={jobNotes}
+              onChange={(e) => setJobNotes(e.target.value)}
+              className="w-full p-3 border rounded-lg text-sm"
+              placeholder="e.g. Fix cipher, service swell"
+            />
+          </div>
+          
+          {/* ADHD: Very clear next step instruction */}
+          <div className={`text-lg mt-4 font-bold text-center p-3 rounded-lg ${selectedTicketToBook ? 'text-orange-700 bg-orange-200' : 'text-green-700 bg-green-200'}`}>
+            👆 Now tap a day on the calendar
+          </div>
+          
+          <button
+            onClick={() => { setSelectedCustomerToBook(null); setSelectedTicketToBook(null); setCustomQuote(''); setJobNotes(''); }}
+            className="w-full mt-3 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
       
       {/* INBOX - Faults and requests */}
       {(tickets.length > 0 || showAddTicket) && (
@@ -680,70 +748,6 @@ const CommandCentre = () => {
       )}
 
       <h2 className="text-xl font-bold mb-3">📋 Tunings Due</h2>
-      
-      {/* ADHD: Clear booking state with obvious next step */}
-      {selectedCustomerToBook && (
-        <div className="bg-green-100 border-2 border-green-500 rounded-lg p-4 mb-3 booking-highlight">
-          <div className="font-bold text-green-800 text-lg">📍 Booking:</div>
-          <div className="text-green-700 font-medium text-lg">{selectedCustomerToBook.name}</div>
-          
-          <div className="grid grid-cols-2 gap-2 mt-3">
-            {['tuning_full', 'tuning_half', 'fault', 'big'].map(type => (
-              <button
-                key={type}
-                onClick={() => setBookingType(type)}
-                className={`py-3 rounded-lg text-sm font-medium touch-target ${
-                  bookingType === type 
-                    ? type === 'big' ? 'bg-red-500 text-white' : type === 'fault' ? 'bg-orange-400 text-white' : 'bg-blue-500 text-white'
-                    : 'bg-gray-200'
-                }`}
-              >
-                {getJobTypeLabel(type).split(' ')[0]}<br/>
-                £{type === 'big' ? 'Quote' : getJobPrice(type, selectedCustomerToBook)}
-              </button>
-            ))}
-          </div>
-          
-          {bookingType === 'big' && (
-            <div className="mt-3">
-              <label className="text-sm text-gray-600">Quote amount:</label>
-              <div className="relative">
-                <span className="absolute left-3 top-3 text-gray-500">£</span>
-                <input
-                  type="number"
-                  value={customQuote}
-                  onChange={(e) => setCustomQuote(e.target.value)}
-                  className="w-full p-3 pl-7 border rounded-lg"
-                  placeholder="Enter quote"
-                />
-              </div>
-            </div>
-          )}
-          
-          <div className="mt-3">
-            <label className="text-sm text-gray-600">Job notes (optional):</label>
-            <input
-              type="text"
-              value={jobNotes}
-              onChange={(e) => setJobNotes(e.target.value)}
-              className="w-full p-3 border rounded-lg text-sm"
-              placeholder="e.g. Fix cipher, service swell"
-            />
-          </div>
-          
-          {/* ADHD: Very clear next step instruction */}
-          <div className="text-lg text-green-700 mt-4 font-bold text-center bg-green-200 p-3 rounded-lg">
-            👆 Now tap a day on the calendar
-          </div>
-          
-          <button
-            onClick={() => { setSelectedCustomerToBook(null); setSelectedTicketToBook(null); setCustomQuote(''); setJobNotes(''); }}
-            className="w-full mt-3 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target"
-          >
-            Cancel
-          </button>
-        </div>
-      )}
 
       <div className="flex-1 overflow-y-auto space-y-2">
         {jobsDue.length === 0 ? (
@@ -1306,7 +1310,7 @@ const CommandCentre = () => {
       {/* Main Content */}
       {view === 'planner' && (
         <div className="flex gap-3 flex-1">
-          <JobsDuePanel />
+          {jobsDuePanelContent}
           <div className="flex-1">
             <YearView />
           </div>
