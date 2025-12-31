@@ -552,6 +552,7 @@
     let timerInterval = null;
     let timerStartTime = null;
     let customers = [];
+    let projects = [];
     let partTypes = [];
     
     async function init() {
@@ -640,8 +641,9 @@
     
     async function loadSetupData() {
       try {
-        [customers, partTypes] = await Promise.all([
+        [customers, projects, partTypes] = await Promise.all([
           apiCall('getCustomers'),
+          apiCall('getProjects'),
           apiCall('getPartTypes')
         ]);
         
@@ -685,30 +687,16 @@
       } else {
         newFields.classList.add('hidden');
         
-        // Load existing projects for this customer
+        // Load existing projects for this customer from Projects table
         if (select.value) {
-          loadCustomerProjects(select.value);
+          const customerProjects = projects.filter(p => p.customerId === select.value && p.status === 'active');
+          customerProjects.forEach(project => {
+            const option = document.createElement('option');
+            option.value = project.id;
+            option.textContent = project.name;
+            projectSelect.insertBefore(option, projectSelect.lastElementChild);
+          });
         }
-      }
-    }
-    
-    async function loadCustomerProjects(customerId) {
-      try {
-        const jobs = await apiCall('getJobs', { customerId: customerId });
-        const projectSelect = document.getElementById('projectSelect');
-        
-        // Get unique project references
-        const projects = [...new Set(jobs.map(j => j.projectRef).filter(p => p))];
-        
-        // Add to dropdown (before the "+ New" option)
-        projects.forEach(project => {
-          const option = document.createElement('option');
-          option.value = project;
-          option.textContent = project;
-          projectSelect.insertBefore(option, projectSelect.lastElementChild);
-        });
-      } catch (err) {
-        console.error('Failed to load projects:', err);
       }
     }
     
@@ -756,20 +744,48 @@
         customerName = customer ? customer.name : '';
       }
       
-      // Get project reference
+      // Get project - now uses projectId linking to Projects table
       const projectSelect = document.getElementById('projectSelect');
-      let projectRef = projectSelect.value;
-      if (projectRef === '__new__') {
-        projectRef = document.getElementById('newProjectName').value.trim();
-      } else if (projectRef === '') {
-        projectRef = '';
+      let projectId = projectSelect.value;
+      let projectName = '';
+      
+      if (projectId === '__new__') {
+        const newProjectName = document.getElementById('newProjectName').value.trim();
+        if (!newProjectName) {
+          alert('Please enter project name');
+          return;
+        }
+        
+        try {
+          // Create project in Projects table
+          const result = await apiCall('addProject', { 
+            data: { 
+              customerId: customerId,
+              name: newProjectName,
+              status: 'active'
+            }
+          });
+          projectId = result.id;
+          projectName = newProjectName;
+          
+          // Add to local projects array
+          projects.push({ id: projectId, customerId: customerId, name: projectName, status: 'active' });
+        } catch (err) {
+          alert('Failed to create project: ' + err.message);
+          return;
+        }
+      } else if (projectId) {
+        // Existing project selected
+        const project = projects.find(p => p.id === projectId);
+        projectName = project ? project.name : '';
       }
       
       const jobData = {
         id: currentJobId,
         customerId: customerId,
         customerName: customerName,
-        projectRef: projectRef,
+        projectId: projectId || '',
+        projectName: projectName,
         partName: document.getElementById('partName').value.trim(),
         partType: document.getElementById('partType').value,
         jobType: document.getElementById('jobType').value,
@@ -802,7 +818,7 @@
     async function showTracker() {
       document.getElementById('trackerJobId').textContent = currentJobId;
       document.getElementById('customerName').textContent = currentJob.customerName || 'Unknown Customer';
-      document.getElementById('projectInfo').textContent = currentJob.projectRef || '-';
+      document.getElementById('projectInfo').textContent = currentJob.projectName || currentJob.projectRef || '-';
       document.getElementById('partInfo').textContent = 
         (currentJob.partName ? currentJob.partName + ' • ' : '') + (currentJob.partType || '-');
       
@@ -1030,7 +1046,7 @@
         
         let details = `JOB: ${currentJobId}\n`;
         details += `Customer: ${currentJob.customerName}\n`;
-        details += `Project: ${currentJob.projectRef || '-'}\n`;
+        details += `Project: ${currentJob.projectName || currentJob.projectRef || '-'}\n`;
         details += `Part: ${currentJob.partName || '-'} (${currentJob.partType || '-'})\n`;
         details += `\nTOTALS:\n`;
         details += `Hours: ${summary.totalHours.toFixed(2)}\n`;
