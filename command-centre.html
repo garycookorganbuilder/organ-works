@@ -166,6 +166,8 @@ const CommandCentre = () => {
   const [showNewProject, setShowNewProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectCustomer, setNewProjectCustomer] = useState(null);
+  const [projectCustomerSearch, setProjectCustomerSearch] = useState('');
+  const [newProjectEstDays, setNewProjectEstDays] = useState('');
 
   // Current year for planner
   const currentYear = currentDate.getFullYear();
@@ -333,11 +335,19 @@ const CommandCentre = () => {
       .filter(b => b.type === 'project')
       .forEach(b => {
         if (!projectMap[b.projectId]) {
+          // Try to extract estimatedDays from notes like "Est: 60 days"
+          let estDays = b.estimatedDays;
+          if (!estDays && b.notes) {
+            const match = b.notes.match(/Est:\s*(\d+)\s*days/i);
+            if (match) estDays = parseInt(match[1]);
+          }
+          
           projectMap[b.projectId] = {
             id: b.projectId,
             name: b.projectName,
             customerId: b.customerId,
             customerName: customers.find(c => c.id === b.customerId)?.name || 'Unknown',
+            estimatedDays: estDays || null,
             days: []
           };
         }
@@ -473,11 +483,14 @@ const CommandCentre = () => {
       id: projectId,
       name: newProjectName,
       customerId: newProjectCustomer.id,
-      customerName: newProjectCustomer.name
+      customerName: newProjectCustomer.name,
+      estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : null
     });
     setShowNewProject(false);
     setNewProjectName('');
     setNewProjectCustomer(null);
+    setProjectCustomerSearch('');
+    setNewProjectEstDays('');
   };
 
   const toggleProjectDay = async (dateStr) => {
@@ -508,7 +521,7 @@ const CommandCentre = () => {
             projectName: allocatingProject.name,
             price: 0,
             status: 'scheduled',
-            notes: allocatingProject.name
+            notes: allocatingProject.estimatedDays ? `Est: ${allocatingProject.estimatedDays} days` : allocatingProject.name
           }
         });
         
@@ -520,9 +533,10 @@ const CommandCentre = () => {
           serviceType: 'project',
           projectId: allocatingProject.id,
           projectName: allocatingProject.name,
+          estimatedDays: allocatingProject.estimatedDays,
           price: 0,
           status: 'scheduled',
-          notes: allocatingProject.name
+          notes: allocatingProject.estimatedDays ? `Est: ${allocatingProject.estimatedDays} days` : allocatingProject.name
         }]);
       }
       setLastSaved(new Date());
@@ -906,6 +920,47 @@ const CommandCentre = () => {
         {/* New project form */}
         {showNewProject && (
           <div className="bg-purple-50 border-2 border-purple-300 rounded-lg p-3 mb-2">
+            {/* Customer search */}
+            <div className="relative mb-2">
+              <input
+                type="text"
+                placeholder="Search customer..."
+                value={projectCustomerSearch}
+                onChange={(e) => {
+                  setProjectCustomerSearch(e.target.value);
+                  setNewProjectCustomer(null);
+                }}
+                className="w-full p-2 border rounded"
+              />
+              {projectCustomerSearch && !newProjectCustomer && (
+                <div className="absolute top-full left-0 right-0 bg-white border rounded-b shadow-lg max-h-40 overflow-y-auto z-10">
+                  {customers
+                    .filter(c => c.name.toLowerCase().includes(projectCustomerSearch.toLowerCase()))
+                    .slice(0, 10)
+                    .map(c => (
+                      <div
+                        key={c.id}
+                        onClick={() => {
+                          setNewProjectCustomer(c);
+                          setProjectCustomerSearch(c.name);
+                        }}
+                        className="p-2 hover:bg-purple-50 cursor-pointer border-b"
+                      >
+                        {c.name}
+                      </div>
+                    ))}
+                  {customers.filter(c => c.name.toLowerCase().includes(projectCustomerSearch.toLowerCase())).length === 0 && (
+                    <div className="p-2 text-gray-400">No matches</div>
+                  )}
+                </div>
+              )}
+            </div>
+            {newProjectCustomer && (
+              <div className="bg-purple-100 p-2 rounded mb-2 flex justify-between items-center">
+                <span className="font-medium">{newProjectCustomer.name}</span>
+                <button onClick={() => { setNewProjectCustomer(null); setProjectCustomerSearch(''); }} className="text-gray-500">✕</button>
+              </div>
+            )}
             <input
               type="text"
               placeholder="Project name..."
@@ -914,23 +969,15 @@ const CommandCentre = () => {
               className="w-full p-2 border rounded mb-2"
             />
             <input
-              type="text"
-              placeholder="Search customer..."
-              value={newProjectCustomer?.name || ''}
-              onChange={(e) => {
-                const search = e.target.value.toLowerCase();
-                const found = customers.find(c => c.name.toLowerCase().includes(search));
-                setNewProjectCustomer(found || null);
-              }}
+              type="number"
+              placeholder="Estimated days (optional)"
+              value={newProjectEstDays}
+              onChange={(e) => setNewProjectEstDays(e.target.value)}
               className="w-full p-2 border rounded mb-2"
-              list="project-customers"
             />
-            <datalist id="project-customers">
-              {customers.map(c => <option key={c.id} value={c.name} />)}
-            </datalist>
             <div className="flex gap-2">
               <button
-                onClick={() => { setShowNewProject(false); setNewProjectName(''); setNewProjectCustomer(null); }}
+                onClick={() => { setShowNewProject(false); setNewProjectName(''); setNewProjectCustomer(null); setProjectCustomerSearch(''); setNewProjectEstDays(''); }}
                 className="flex-1 py-2 bg-gray-200 rounded"
               >Cancel</button>
               <button
@@ -946,8 +993,13 @@ const CommandCentre = () => {
         {allocatingProject && (
           <div className="bg-purple-500 text-white rounded-lg p-3 mb-2">
             <div className="font-bold">📍 Allocating Days</div>
-            <div className="text-sm">{allocatingProject.name}</div>
             <div className="text-sm opacity-80">{allocatingProject.customerName}</div>
+            <div className="font-medium">{allocatingProject.name}</div>
+            {allocatingProject.estimatedDays && (
+              <div className="text-sm mt-1">
+                {bookings.filter(b => b.type === 'project' && b.projectId === allocatingProject.id).length} of {allocatingProject.estimatedDays} days
+              </div>
+            )}
             <div className="text-xs mt-2 opacity-80">Tap days to add/remove</div>
             <button
               onClick={() => setAllocatingProject(null)}
@@ -967,9 +1019,14 @@ const CommandCentre = () => {
                 onClick={() => setAllocatingProject(project)}
                 className="bg-purple-50 border-2 border-purple-200 rounded-lg p-3 cursor-pointer hover:border-purple-400"
               >
-                <div className="font-medium">{project.name}</div>
                 <div className="text-sm text-gray-600">{project.customerName}</div>
-                <div className="text-sm text-purple-600">{project.days.length} days allocated</div>
+                <div className="font-medium">{project.name}</div>
+                <div className="text-sm text-purple-600">
+                  {project.estimatedDays 
+                    ? `${project.days.length} of ${project.estimatedDays} days`
+                    : `${project.days.length} days allocated`
+                  }
+                </div>
               </div>
             ))}
           </div>
@@ -1167,8 +1224,8 @@ const CommandCentre = () => {
                 >
                   <div className="flex justify-between items-start">
                     <div>
-                      <div className="font-bold text-lg">{isProject ? booking.projectName : customer?.name}</div>
                       {isProject && <div className="text-sm text-gray-600">{customer?.name}</div>}
+                      <div className="font-bold text-lg">{isProject ? booking.projectName : customer?.name}</div>
                       <div className="text-sm text-gray-500 mt-1">{getJobTypeLabel(booking.type)}</div>
                       {booking.notes && !isProject && <div className="text-sm italic mt-1">{booking.notes}</div>}
                     </div>
