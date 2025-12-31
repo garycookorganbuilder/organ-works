@@ -157,6 +157,7 @@ const CommandCentre = () => {
   const [materialSearch, setMaterialSearch] = useState('');
   const [materialQty, setMaterialQty] = useState(1);
   const [newMaterialQty, setNewMaterialQty] = useState(1);
+  const [selectedMaterial, setSelectedMaterial] = useState(null); // {name, price}
 
   // Current year for planner
   const currentYear = currentDate.getFullYear();
@@ -1012,6 +1013,7 @@ const CommandCentre = () => {
                           setMaterialSearch('');
                           setMaterialQty(1);
                           setNewMaterialQty(1);
+                          setSelectedMaterial(null);
                           setShowInvoiceCalc({ ...booking, distance, actualHours });
                         }}
                         className="text-sm bg-amber-200 px-4 py-2 rounded-lg hover:bg-amber-300 touch-target"
@@ -1487,7 +1489,10 @@ const CommandCentre = () => {
                       type="text"
                       placeholder="Search materials..."
                       value={materialSearch || ''}
-                      onChange={(e) => setMaterialSearch(e.target.value)}
+                      onChange={(e) => {
+                        setMaterialSearch(e.target.value);
+                        setSelectedMaterial(null);
+                      }}
                       className="flex-1 p-2 border rounded text-sm"
                     />
                     <input
@@ -1498,8 +1503,24 @@ const CommandCentre = () => {
                       className="w-16 p-2 border rounded text-sm text-center"
                       placeholder="Qty"
                     />
+                    <button
+                      disabled={!selectedMaterial}
+                      onClick={() => {
+                        if (selectedMaterial) {
+                          setInvoiceMaterials([...invoiceMaterials, { 
+                            description: selectedMaterial.name, 
+                            cost: selectedMaterial.price, 
+                            quantity: materialQty 
+                          }]);
+                          setMaterialSearch('');
+                          setSelectedMaterial(null);
+                          setMaterialQty(1);
+                        }
+                      }}
+                      className={`px-3 py-2 rounded text-sm font-medium ${selectedMaterial ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-400'}`}
+                    >Add</button>
                   </div>
-                  {materialSearch && (
+                  {materialSearch && !selectedMaterial && (
                     <div className="absolute top-full left-0 right-0 bg-white border rounded-b shadow-lg max-h-40 overflow-y-auto z-10">
                       {materialsList
                         .filter(m => m.name.toLowerCase().includes(materialSearch.toLowerCase()))
@@ -1507,9 +1528,8 @@ const CommandCentre = () => {
                           <div
                             key={idx}
                             onClick={() => {
-                              setInvoiceMaterials([...invoiceMaterials, { description: mat.name, cost: mat.price, quantity: materialQty }]);
-                              setMaterialSearch('');
-                              setMaterialQty(1);
+                              setSelectedMaterial({ name: mat.name, price: mat.price });
+                              setMaterialSearch(mat.name);
                             }}
                             className="flex justify-between p-2 hover:bg-blue-50 cursor-pointer border-b"
                           >
