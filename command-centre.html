@@ -1,0 +1,1133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Command Centre — Organ Works</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { touch-action: manipulation; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+      margin: 0; 
+    }
+    
+    /* ADHD-friendly: Reduce visual noise when booking */
+    .focus-mode .dim-when-booking {
+      opacity: 0.3;
+      pointer-events: none;
+      filter: grayscale(50%);
+    }
+    
+    /* ADHD-friendly: Clear visual feedback on booking panel */
+    .booking-highlight {
+      animation: pulse-green 1.5s ease-in-out infinite;
+    }
+    
+    @keyframes pulse-green {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
+      50% { box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
+    }
+    
+    /* Large touch targets */
+    .touch-target {
+      min-height: 48px;
+      min-width: 48px;
+    }
+    
+    /* Loading state */
+    .loading-spinner {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #3b82f6;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    @media print {
+      .no-print { display: none !important; }
+      body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+// ============================================================
+// CONFIGURATION
+// ============================================================
+
+const getApiUrl = () => localStorage.getItem('organWorks_apiUrl') || '';
+const setApiUrl = (url) => localStorage.setItem('organWorks_apiUrl', url);
+
+// ============================================================
+// API FUNCTIONS
+// ============================================================
+
+const apiCall = async (action, params = {}) => {
+  const API_URL = getApiUrl();
+  if (!API_URL) throw new Error('API URL not configured');
+  
+  const url = new URL(API_URL);
+  url.searchParams.set('action', action);
+  
+  Object.keys(params).forEach(key => {
+    if (typeof params[key] === 'object') {
+      url.searchParams.set(key, JSON.stringify(params[key]));
+    } else {
+      url.searchParams.set(key, params[key]);
+    }
+  });
+  
+  const response = await fetch(url.toString());
+  const data = await response.json();
+  
+  if (data && data.error) {
+    throw new Error(data.error);
+  }
+  
+  return data;
+};
+
+// ============================================================
+// MAIN COMPONENT
+// ============================================================
+
+const CommandCentre = () => {
+  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
+                      'July', 'August', 'September', 'October', 'November', 'December'];
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+  // Default pricing
+  const DEFAULT_PRICES = {
+    tuning_full: 550,
+    tuning_half: 300,
+    fault: 300,
+    big: 550
+  };
+
+  // State
+  const [isConfigured, setIsConfigured] = useState(!!getApiUrl());
+  const [configUrl, setConfigUrl] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [lastSaved, setLastSaved] = useState(null);
+  
+  const [customers, setCustomers] = useState([]);
+  const [contacts, setContacts] = useState([]);
+  const [bookings, setBookings] = useState([]);
+  const [daysOff, setDaysOff] = useState([]);
+
+  const [viewMode, setViewMode] = useState('year');
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [selectedCustomerToBook, setSelectedCustomerToBook] = useState(null);
+  const [selectedDay, setSelectedDay] = useState(null);
+  const [view, setView] = useState('planner');
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [bookingType, setBookingType] = useState('tuning_full');
+  const [customQuote, setCustomQuote] = useState('');
+  const [jobNotes, setJobNotes] = useState('');
+
+  // Current year for planner
+  const currentYear = currentDate.getFullYear();
+  
+  // Planner months
+  const plannerMonths = monthNames.map((name, idx) => ({
+    name,
+    year: currentYear,
+    month: idx,
+    days: new Date(currentYear, idx + 1, 0).getDate()
+  }));
+
+  // ============================================================
+  // DATA LOADING
+  // ============================================================
+  
+  const loadData = useCallback(async () => {
+    if (!getApiUrl()) return;
+    
+    setLoading(true);
+    try {
+      const data = await apiCall('getAllData');
+      
+      // Parse customers
+      const parsedCustomers = (data.customers || []).map(c => ({
+        ...c,
+        tuningMonths: typeof c.tuningMonths === 'string' ? 
+          (c.tuningMonths ? JSON.parse(c.tuningMonths) : []) : 
+          (c.tuningMonths || []),
+        customRate: c.customRate ? parseFloat(c.customRate) : null
+      }));
+      
+      setCustomers(parsedCustomers);
+      setContacts(data.contacts || []);
+      setBookings(data.bookings || []);
+      setDaysOff((data.daysOff || []).map(d => d.date));
+      
+    } catch (err) {
+      console.error('Failed to load data:', err);
+      alert('Failed to load data: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isConfigured) {
+      loadData();
+    }
+  }, [isConfigured, loadData]);
+
+  // ============================================================
+  // HELPER FUNCTIONS
+  // ============================================================
+  
+  const getDateString = (year, month, day) => 
+    `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  
+  const getDayOfWeek = (year, month, day) => new Date(year, month, day).getDay();
+  
+  const isWorkDay = (year, month, day) => {
+    const dow = getDayOfWeek(year, month, day);
+    return dow >= 1 && dow <= 5; // Mon-Fri available
+  };
+  
+  const getBookingsForDay = (date) => bookings.filter(b => b.date === date);
+  
+  const getCustomerById = (id) => customers.find(c => c.id === id);
+  
+  const isDayOff = (date) => daysOff.includes(date);
+
+  const getJobPrice = (type, customer, customAmount) => {
+    if (customAmount) return parseFloat(customAmount);
+    if (type === 'tuning_full') return customer?.customRate || DEFAULT_PRICES.tuning_full;
+    if (type === 'tuning_half') return customer?.customRate ? Math.round(customer.customRate * 0.55) : DEFAULT_PRICES.tuning_half;
+    if (type === 'fault') return DEFAULT_PRICES.fault;
+    if (type === 'big') return DEFAULT_PRICES.big;
+    return 0;
+  };
+
+  const getJobTypeLabel = (type) => {
+    if (type === 'tuning_full') return 'Tuning (Full Day)';
+    if (type === 'tuning_half') return 'Tuning (Half Day)';
+    if (type === 'fault') return 'Fault Visit';
+    if (type === 'big') return 'Big Job';
+    return type;
+  };
+
+  const getJobTypeColor = (type) => {
+    if (type?.startsWith('tuning')) return 'blue';
+    if (type === 'fault') return 'orange';
+    if (type === 'big') return 'red';
+    return 'gray';
+  };
+
+  const isCustomerBookedInMonth = (customerId, monthIndex, year) => {
+    const monthStart = getDateString(year, monthIndex, 1);
+    const monthEnd = getDateString(year, monthIndex, new Date(year, monthIndex + 1, 0).getDate());
+    return bookings.some(b => 
+      b.customerId === customerId && 
+      b.date >= monthStart && 
+      b.date <= monthEnd
+    );
+  };
+
+  const getCustomerHistory = (customerId) => {
+    return bookings
+      .filter(b => b.customerId === customerId)
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+  };
+
+  const getJobsDue = () => {
+    const now = new Date();
+    const thisMonth = now.getMonth();
+    const thisYear = now.getFullYear();
+    const nextMonth = (thisMonth + 1) % 12;
+    const nextYear = thisMonth === 11 ? thisYear + 1 : thisYear;
+
+    const due = [];
+    customers.forEach(customer => {
+      if (!customer.tuningMonths || customer.tuningMonths.length === 0) return;
+      
+      if (customer.tuningMonths.includes(thisMonth) && !isCustomerBookedInMonth(customer.id, thisMonth, thisYear)) {
+        due.push({ customer, month: thisMonth, year: thisYear, monthName: monthNames[thisMonth], urgent: true });
+      }
+      if (customer.tuningMonths.includes(nextMonth) && !isCustomerBookedInMonth(customer.id, nextMonth, nextYear)) {
+        due.push({ customer, month: nextMonth, year: nextYear, monthName: monthNames[nextMonth], urgent: false });
+      }
+    });
+    return due;
+  };
+
+  const jobsDue = getJobsDue();
+
+  // ============================================================
+  // BOOKING FUNCTIONS
+  // ============================================================
+  
+  const addBooking = async (date, customerId, type, price, notes) => {
+    setSaving(true);
+    try {
+      const customer = getCustomerById(customerId);
+      const finalPrice = price || getJobPrice(type, customer);
+      
+      const result = await apiCall('addBooking', {
+        data: {
+          date,
+          customerId,
+          type,
+          price: finalPrice,
+          status: 'scheduled',
+          notes: notes || ''
+        }
+      });
+      
+      // Add to local state
+      setBookings([...bookings, {
+        id: result.id,
+        date,
+        customerId,
+        type,
+        price: finalPrice,
+        status: 'scheduled',
+        notes: notes || ''
+      }]);
+      
+      // Clear booking form
+      setSelectedCustomerToBook(null);
+      setCustomQuote('');
+      setJobNotes('');
+      setLastSaved(new Date());
+      
+    } catch (err) {
+      alert('Failed to save booking: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeBooking = async (date, bookingId) => {
+    if (!confirm('Remove this booking?')) return;
+    
+    setSaving(true);
+    try {
+      await apiCall('deleteBooking', { bookingId });
+      setBookings(bookings.filter(b => b.id !== bookingId));
+      setLastSaved(new Date());
+    } catch (err) {
+      alert('Failed to remove booking: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const updateBookingStatus = async (bookingId, status) => {
+    setSaving(true);
+    try {
+      const updates = { id: bookingId, status };
+      if (status === 'invoiced') updates.invoiceDate = new Date().toISOString().split('T')[0];
+      if (status === 'paid') updates.paidDate = new Date().toISOString().split('T')[0];
+      
+      await apiCall('updateBooking', { data: updates });
+      
+      setBookings(bookings.map(b => 
+        b.id === bookingId ? { ...b, ...updates } : b
+      ));
+      setLastSaved(new Date());
+    } catch (err) {
+      alert('Failed to update: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleDayOff = async (date) => {
+    setSaving(true);
+    try {
+      if (isDayOff(date)) {
+        await apiCall('removeDayOff', { date });
+        setDaysOff(daysOff.filter(d => d !== date));
+      } else {
+        await apiCall('addDayOff', { data: { date, reason: '' } });
+        setDaysOff([...daysOff, date]);
+      }
+      setLastSaved(new Date());
+    } catch (err) {
+      alert('Failed to update day off: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDayClick = (dateStr, year, month, day) => {
+    if (!isWorkDay(year, month, day)) return;
+    if (isDayOff(dateStr)) return;
+    
+    if (selectedCustomerToBook) {
+      const price = customQuote ? parseFloat(customQuote) : getJobPrice(bookingType, selectedCustomerToBook);
+      addBooking(dateStr, selectedCustomerToBook.id, bookingType, price, jobNotes);
+    } else {
+      setSelectedDay(dateStr);
+    }
+  };
+
+  // ============================================================
+  // CUSTOMER FUNCTIONS
+  // ============================================================
+  
+  const updateCustomer = async (customer) => {
+    setSaving(true);
+    try {
+      await apiCall('updateCustomer', { 
+        data: {
+          ...customer,
+          tuningMonths: customer.tuningMonths
+        }
+      });
+      
+      setCustomers(customers.map(c => c.id === customer.id ? customer : c));
+      setLastSaved(new Date());
+    } catch (err) {
+      alert('Failed to save: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // ============================================================
+  // STATS
+  // ============================================================
+  
+  const getStats = () => {
+    const completedJobs = bookings.filter(b => b.status === 'completed');
+    const uninvoicedTotal = completedJobs.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0);
+    const awaitingPayment = bookings.filter(b => b.status === 'invoiced');
+    const awaitingTotal = awaitingPayment.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0);
+    
+    return {
+      tuningDays: bookings.filter(b => b.type?.startsWith('tuning')).length,
+      faultDays: bookings.filter(b => b.type === 'fault').length,
+      bigDays: bookings.filter(b => b.type === 'big').length,
+      needsInvoicing: completedJobs.length,
+      uninvoicedTotal,
+      awaitingPayment: awaitingPayment.length,
+      awaitingTotal
+    };
+  };
+
+  const stats = getStats();
+
+  // ============================================================
+  // CONFIGURATION SCREEN
+  // ============================================================
+  
+  if (!isConfigured) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center p-8">
+        <div className="bg-white rounded-2xl p-8 max-w-lg w-full shadow-2xl">
+          <h1 className="text-3xl font-bold mb-2">🎹 Command Centre</h1>
+          <p className="text-gray-600 mb-6">Connect to your Google Sheets database</p>
+          
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Google Apps Script URL
+          </label>
+          <input
+            type="text"
+            value={configUrl}
+            onChange={(e) => setConfigUrl(e.target.value)}
+            placeholder="https://script.google.com/macros/s/..."
+            className="w-full p-4 text-lg border-2 rounded-lg mb-6"
+          />
+          
+          <button
+            onClick={() => {
+              if (configUrl) {
+                setApiUrl(configUrl);
+                setIsConfigured(true);
+              }
+            }}
+            className="w-full bg-blue-600 text-white py-4 rounded-lg text-xl font-bold hover:bg-blue-700"
+          >
+            Connect
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================
+  // LOADING SCREEN
+  // ============================================================
+  
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="loading-spinner mx-auto mb-4"></div>
+          <p className="text-xl text-gray-600">Loading your data...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================
+  // JOBS DUE PANEL (Left sidebar)
+  // ============================================================
+  
+  const JobsDuePanel = () => (
+    <div className="w-80 bg-white rounded-lg shadow-xl p-4 flex flex-col h-full no-print">
+      <h2 className="text-xl font-bold mb-3">📋 Tunings Due</h2>
+      
+      {/* ADHD: Clear booking state with obvious next step */}
+      {selectedCustomerToBook && (
+        <div className="bg-green-100 border-2 border-green-500 rounded-lg p-4 mb-3 booking-highlight">
+          <div className="font-bold text-green-800 text-lg">📍 Booking:</div>
+          <div className="text-green-700 font-medium text-lg">{selectedCustomerToBook.name}</div>
+          
+          <div className="grid grid-cols-2 gap-2 mt-3">
+            {['tuning_full', 'tuning_half', 'fault', 'big'].map(type => (
+              <button
+                key={type}
+                onClick={() => setBookingType(type)}
+                className={`py-3 rounded-lg text-sm font-medium touch-target ${
+                  bookingType === type 
+                    ? type === 'big' ? 'bg-red-500 text-white' : type === 'fault' ? 'bg-orange-400 text-white' : 'bg-blue-500 text-white'
+                    : 'bg-gray-200'
+                }`}
+              >
+                {getJobTypeLabel(type).split(' ')[0]}<br/>
+                £{type === 'big' ? 'Quote' : getJobPrice(type, selectedCustomerToBook)}
+              </button>
+            ))}
+          </div>
+          
+          {bookingType === 'big' && (
+            <div className="mt-3">
+              <label className="text-sm text-gray-600">Quote amount:</label>
+              <div className="relative">
+                <span className="absolute left-3 top-3 text-gray-500">£</span>
+                <input
+                  type="number"
+                  value={customQuote}
+                  onChange={(e) => setCustomQuote(e.target.value)}
+                  className="w-full p-3 pl-7 border rounded-lg"
+                  placeholder="Enter quote"
+                />
+              </div>
+            </div>
+          )}
+          
+          <div className="mt-3">
+            <label className="text-sm text-gray-600">Job notes (optional):</label>
+            <input
+              type="text"
+              value={jobNotes}
+              onChange={(e) => setJobNotes(e.target.value)}
+              className="w-full p-3 border rounded-lg text-sm"
+              placeholder="e.g. Fix cipher, service swell"
+            />
+          </div>
+          
+          {/* ADHD: Very clear next step instruction */}
+          <div className="text-lg text-green-700 mt-4 font-bold text-center bg-green-200 p-3 rounded-lg">
+            👆 Now tap a day on the calendar
+          </div>
+          
+          <button
+            onClick={() => { setSelectedCustomerToBook(null); setCustomQuote(''); setJobNotes(''); }}
+            className="w-full mt-3 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      <div className="flex-1 overflow-y-auto space-y-2">
+        {jobsDue.length === 0 ? (
+          <div className="text-center py-8">
+            <div className="text-5xl mb-3">🎉</div>
+            <p className="text-gray-500 text-lg">All caught up!</p>
+          </div>
+        ) : (
+          jobsDue.map((item, idx) => (
+            <div
+              key={idx}
+              onClick={() => {
+                setSelectedCustomerToBook(item.customer);
+                setBookingType('tuning_full');
+                setCustomQuote('');
+                setJobNotes('');
+              }}
+              className={`p-4 rounded-lg cursor-pointer transition-all touch-target ${
+                item.urgent ? 'bg-amber-50 border-2 border-amber-400' : 'bg-gray-50 border-2 border-gray-200'
+              } ${selectedCustomerToBook?.id === item.customer.id ? 'ring-4 ring-green-500' : 'hover:border-blue-400'}`}
+            >
+              <div className="font-bold text-lg">{item.customer.name}</div>
+              <div className="flex justify-between items-center mt-1">
+                <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>
+                  {item.monthName} {item.urgent && '⚠️'}
+                </span>
+                <span className="text-lg text-green-600 font-bold">
+                  £{item.customer.customRate || DEFAULT_PRICES.tuning_full}
+                </span>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Action alerts */}
+      {(stats.needsInvoicing > 0 || stats.awaitingPayment > 0) && (
+        <div className="mt-4 pt-4 border-t space-y-2">
+          {stats.needsInvoicing > 0 && (
+            <div className="bg-amber-100 p-3 rounded-lg">
+              <div className="font-bold text-amber-800">📧 {stats.needsInvoicing} need invoicing</div>
+              <div className="text-amber-700">£{stats.uninvoicedTotal.toLocaleString()}</div>
+            </div>
+          )}
+          {stats.awaitingPayment > 0 && (
+            <div className="bg-blue-100 p-3 rounded-lg">
+              <div className="font-bold text-blue-800">💷 {stats.awaitingPayment} awaiting payment</div>
+              <div className="text-blue-700">£{stats.awaitingTotal.toLocaleString()}</div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  // ============================================================
+  // YEAR VIEW
+  // ============================================================
+  
+  const YearView = () => (
+    <div className={`bg-white rounded-lg shadow overflow-auto ${selectedCustomerToBook ? 'focus-mode' : ''}`}>
+      <table className="w-full border-collapse">
+        <thead className="sticky top-0 bg-gray-800 text-white">
+          <tr>
+            <th className="p-3 text-left text-lg w-32">{currentYear}</th>
+            {[...Array(31)].map((_, i) => (
+              <th key={i} className="p-1 text-center text-sm font-medium">{i + 1}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {plannerMonths.map((monthData, monthIdx) => (
+            <tr key={monthIdx} className="border-b">
+              <td className="p-3 font-bold border-r bg-gray-50 text-lg">
+                {monthData.name}
+              </td>
+              {[...Array(31)].map((_, dayIdx) => {
+                const day = dayIdx + 1;
+                if (day > monthData.days) return <td key={dayIdx} className="bg-gray-200"></td>;
+
+                const dateStr = getDateString(monthData.year, monthData.month, day);
+                const isWork = isWorkDay(monthData.year, monthData.month, day);
+                const isOff = isDayOff(dateStr);
+                const dayBookings = getBookingsForDay(dateStr);
+                const hasBooking = dayBookings.length > 0;
+                const firstBookingType = hasBooking ? dayBookings[0].type : null;
+                const color = firstBookingType ? getJobTypeColor(firstBookingType) : null;
+                const isSelecting = selectedCustomerToBook !== null;
+
+                let cellClass = 'text-center border transition-all cursor-pointer ';
+                if (!isWork) cellClass += 'bg-gray-100 dim-when-booking';
+                else if (isOff) cellClass += 'bg-yellow-200 dim-when-booking';
+                else if (color === 'blue') cellClass += 'bg-blue-500 text-white dim-when-booking';
+                else if (color === 'orange') cellClass += 'bg-orange-400 text-white dim-when-booking';
+                else if (color === 'red') cellClass += 'bg-red-500 text-white dim-when-booking';
+                else cellClass += isSelecting ? 'bg-green-200 hover:bg-green-300' : 'bg-green-50 hover:bg-green-100';
+
+                return (
+                  <td
+                    key={dayIdx}
+                    onClick={() => handleDayClick(dateStr, monthData.year, monthData.month, day)}
+                    className={cellClass}
+                  >
+                    <div className="w-8 h-8 flex items-center justify-center mx-auto text-sm font-bold">
+                      {hasBooking ? (
+                        dayBookings.length > 1 ? dayBookings.length : 
+                        firstBookingType?.startsWith('tuning') ? 'T' : 
+                        firstBookingType === 'fault' ? 'F' : 'B'
+                      ) : isWork && !isOff ? '·' : ''}
+                    </div>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      
+      <div className="flex gap-6 p-4 bg-gray-100 border-t text-sm">
+        <div className="flex items-center gap-2"><div className="w-6 h-6 bg-blue-500 rounded"></div> Tuning</div>
+        <div className="flex items-center gap-2"><div className="w-6 h-6 bg-orange-400 rounded"></div> Fault</div>
+        <div className="flex items-center gap-2"><div className="w-6 h-6 bg-red-500 rounded"></div> Big Job</div>
+        <div className="flex items-center gap-2"><div className="w-6 h-6 bg-green-100 border rounded"></div> Available</div>
+        <div className="flex items-center gap-2"><div className="w-6 h-6 bg-yellow-200 rounded"></div> Day off</div>
+        <div className="flex items-center gap-2"><div className="w-6 h-6 bg-gray-200 rounded"></div> Weekend</div>
+      </div>
+    </div>
+  );
+
+  // ============================================================
+  // DAY PANEL (when clicking a day)
+  // ============================================================
+  
+  const DayPanel = ({ date, onClose }) => {
+    const d = new Date(date);
+    const dayBookings = getBookingsForDay(date);
+    const isOff = isDayOff(date);
+
+    return (
+      <div className="w-96 bg-white rounded-lg shadow-xl p-5">
+        <div className="flex justify-between items-start mb-4">
+          <div>
+            <h2 className="text-2xl font-bold">{dayNames[d.getDay()]}</h2>
+            <p className="text-lg text-gray-500">
+              {d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-3xl p-2 touch-target">✕</button>
+        </div>
+
+        <label className="flex items-center gap-3 mb-4 p-4 bg-yellow-50 rounded-lg cursor-pointer touch-target">
+          <input
+            type="checkbox"
+            checked={isOff}
+            onChange={() => toggleDayOff(date)}
+            className="w-6 h-6"
+          />
+          <span className="text-lg font-medium">Day off / Holiday</span>
+        </label>
+
+        {!isOff && (
+          <div className="space-y-3 mb-4">
+            {dayBookings.map((booking) => {
+              const customer = getCustomerById(booking.customerId);
+              const color = getJobTypeColor(booking.type);
+              return (
+                <div
+                  key={booking.id}
+                  className={`p-4 rounded-lg ${
+                    color === 'blue' ? 'bg-blue-100 border-l-4 border-blue-500' :
+                    color === 'orange' ? 'bg-orange-100 border-l-4 border-orange-500' :
+                    'bg-red-100 border-l-4 border-red-500'
+                  }`}
+                >
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <div className="font-bold text-lg">{customer?.name}</div>
+                      <div className="text-sm text-gray-500 mt-1">{getJobTypeLabel(booking.type)}</div>
+                      {booking.notes && <div className="text-sm italic mt-1">{booking.notes}</div>}
+                    </div>
+                    <div className="text-right">
+                      <div className="font-bold text-lg">£{booking.price}</div>
+                      <button
+                        onClick={() => removeBooking(date, booking.id)}
+                        className="text-red-500 text-sm hover:text-red-700 mt-2"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                  
+                  {/* Status buttons */}
+                  <div className="mt-3 pt-2 border-t flex gap-2 flex-wrap">
+                    {booking.status === 'scheduled' && (
+                      <button
+                        onClick={() => updateBookingStatus(booking.id, 'completed')}
+                        className="text-sm bg-white px-4 py-2 rounded-lg hover:bg-green-100 touch-target"
+                      >
+                        ✓ Done
+                      </button>
+                    )}
+                    {booking.status === 'completed' && (
+                      <button
+                        onClick={() => updateBookingStatus(booking.id, 'invoiced')}
+                        className="text-sm bg-amber-200 px-4 py-2 rounded-lg hover:bg-amber-300 touch-target"
+                      >
+                        📧 Invoiced
+                      </button>
+                    )}
+                    {booking.status === 'invoiced' && (
+                      <button
+                        onClick={() => updateBookingStatus(booking.id, 'paid')}
+                        className="text-sm bg-green-200 px-4 py-2 rounded-lg hover:bg-green-300 touch-target"
+                      >
+                        💷 Paid
+                      </button>
+                    )}
+                    {booking.status === 'paid' && (
+                      <span className="text-sm bg-green-500 text-white px-4 py-2 rounded-lg">✓ Paid</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {dayBookings.length === 0 && (
+              <p className="text-gray-400 italic text-lg py-4">No bookings</p>
+            )}
+          </div>
+        )}
+
+        <button
+          onClick={onClose}
+          className="w-full bg-gray-200 py-4 rounded-lg text-lg font-medium hover:bg-gray-300 touch-target"
+        >
+          Close
+        </button>
+      </div>
+    );
+  };
+
+  // ============================================================
+  // CUSTOMER LIST VIEW
+  // ============================================================
+  
+  const CustomerListView = () => (
+    <div className="bg-white rounded-lg shadow-lg p-4">
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-2xl font-bold">Customers ({customers.length})</h2>
+      </div>
+      <div className="grid gap-2 max-h-[calc(100vh-200px)] overflow-y-auto">
+        {customers.sort((a, b) => a.name.localeCompare(b.name)).map(c => {
+          const history = getCustomerHistory(c.id);
+          const outstanding = history
+            .filter(b => b.status !== 'paid')
+            .reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0);
+          
+          return (
+            <div
+              key={c.id}
+              onClick={() => { setSelectedCustomer(c); setView('customerDetail'); }}
+              className="border-2 rounded-lg p-4 hover:bg-gray-50 cursor-pointer flex justify-between items-center touch-target"
+            >
+              <div>
+                <div className="font-bold text-xl">{c.name}</div>
+                <div className="flex gap-1 mt-2 flex-wrap">
+                  {(c.tuningMonths || []).map(m => (
+                    <span key={m} className="bg-blue-100 text-blue-700 text-sm px-2 py-1 rounded">
+                      {monthNames[m].slice(0, 3)}
+                    </span>
+                  ))}
+                  {(!c.tuningMonths || c.tuningMonths.length === 0) && (
+                    <span className="text-gray-400 text-sm">No schedule set</span>
+                  )}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-green-600 font-bold text-xl">
+                  £{c.customRate || DEFAULT_PRICES.tuning_full}
+                </div>
+                {outstanding > 0 && (
+                  <div className="text-amber-600 text-sm">£{outstanding} outstanding</div>
+                )}
+                <div className="text-gray-400 text-2xl mt-2">→</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  // ============================================================
+  // CUSTOMER DETAIL VIEW
+  // ============================================================
+  
+  const CustomerDetailView = () => {
+    const [localCustomer, setLocalCustomer] = useState(selectedCustomer);
+    const customerContacts = contacts.filter(c => c.customerId === selectedCustomer.id);
+    const history = getCustomerHistory(selectedCustomer.id);
+    const totalPaid = history.filter(b => b.status === 'paid').reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0);
+    const outstanding = history.filter(b => b.status !== 'paid').reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0);
+
+    const toggleMonth = async (monthIdx) => {
+      const months = localCustomer.tuningMonths || [];
+      const newMonths = months.includes(monthIdx)
+        ? months.filter(m => m !== monthIdx)
+        : [...months, monthIdx].sort((a, b) => a - b);
+      
+      const updated = { ...localCustomer, tuningMonths: newMonths };
+      setLocalCustomer(updated);
+      await updateCustomer(updated);
+    };
+
+    const saveField = async (field, value) => {
+      const updated = { ...localCustomer, [field]: value };
+      setLocalCustomer(updated);
+      await updateCustomer(updated);
+    };
+
+    return (
+      <div className="bg-white rounded-lg shadow-xl p-6 max-w-4xl mx-auto">
+        <div className="flex justify-between items-start mb-6">
+          <div>
+            <h2 className="text-3xl font-bold">{localCustomer.name}</h2>
+            {saving && <span className="text-blue-500 text-sm ml-2">Saving...</span>}
+            {lastSaved && !saving && <span className="text-green-500 text-sm ml-2">✓ Saved</span>}
+          </div>
+          <button
+            onClick={() => setView('customers')}
+            className="bg-gray-300 px-6 py-3 rounded-lg text-xl touch-target"
+          >
+            ← Back
+          </button>
+        </div>
+
+        {/* Contacts */}
+        <div className="mb-6">
+          <h3 className="font-bold text-xl mb-3">👥 Contacts</h3>
+          {customerContacts.length === 0 ? (
+            <p className="text-gray-400 italic">No contacts</p>
+          ) : (
+            <div className="grid grid-cols-2 gap-4">
+              {customerContacts.map(contact => (
+                <div key={contact.id} className="bg-gray-50 p-4 rounded-lg">
+                  <div className="font-bold">{contact.name || 'Unnamed'}</div>
+                  <div className="text-blue-600 text-sm">{contact.role}</div>
+                  {contact.phone && <div className="text-lg font-bold text-blue-600 mt-1">📞 {contact.phone}</div>}
+                  {contact.mobile && <div className="text-lg">📱 {contact.mobile}</div>}
+                  {contact.email && <div className="text-sm text-gray-600">✉️ {contact.email}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Tuning schedule */}
+        <div className="border-t-2 pt-4 mb-6">
+          <h3 className="font-bold text-xl mb-3">📅 Tuning Schedule</h3>
+          <p className="text-gray-500 mb-3">Tap months when tuning is due:</p>
+          <div className="grid grid-cols-6 gap-2">
+            {monthNames.map((month, idx) => (
+              <button
+                key={idx}
+                onClick={() => toggleMonth(idx)}
+                className={`p-4 text-lg rounded-lg border-2 font-medium transition-all touch-target ${
+                  (localCustomer.tuningMonths || []).includes(idx)
+                    ? 'bg-blue-500 text-white border-blue-500'
+                    : 'bg-white border-gray-300 hover:border-blue-400'
+                }`}
+              >
+                {month.slice(0, 3)}
+              </button>
+            ))}
+          </div>
+          
+          <div className="mt-4">
+            <label className="text-gray-500 text-sm">Tuning notes</label>
+            <input
+              type="text"
+              value={localCustomer.tuningNotes || ''}
+              onChange={(e) => setLocalCustomer({ ...localCustomer, tuningNotes: e.target.value })}
+              onBlur={(e) => saveField('tuningNotes', e.target.value)}
+              placeholder="e.g. Before Easter, heating needed..."
+              className="w-full p-3 border-2 rounded-lg mt-1"
+            />
+          </div>
+        </div>
+
+        {/* Pricing */}
+        <div className="grid grid-cols-2 gap-4 mb-6">
+          <div className="bg-green-50 p-4 rounded-lg">
+            <label className="text-gray-500 text-sm">Rate (blank = £550)</label>
+            <div className="relative mt-1">
+              <span className="absolute left-3 top-3 text-gray-500 text-xl">£</span>
+              <input
+                type="number"
+                value={localCustomer.customRate || ''}
+                onChange={(e) => setLocalCustomer({ ...localCustomer, customRate: e.target.value ? parseFloat(e.target.value) : null })}
+                onBlur={(e) => saveField('customRate', e.target.value ? parseFloat(e.target.value) : null)}
+                placeholder="550"
+                className="w-full p-3 pl-8 text-2xl border-2 rounded-lg"
+              />
+            </div>
+          </div>
+          <div>
+            <div className="bg-green-100 p-4 rounded-lg mb-2">
+              <span className="text-green-700 text-sm">Total Paid</span>
+              <div className="font-bold text-2xl text-green-700">£{totalPaid.toLocaleString()}</div>
+            </div>
+            {outstanding > 0 && (
+              <div className="bg-amber-100 p-4 rounded-lg">
+                <span className="text-amber-700 text-sm">Outstanding</span>
+                <div className="font-bold text-2xl text-amber-700">£{outstanding.toLocaleString()}</div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Notes */}
+        <div className="mb-6">
+          <label className="text-gray-500 text-sm">Notes</label>
+          <textarea
+            value={localCustomer.notes || ''}
+            onChange={(e) => setLocalCustomer({ ...localCustomer, notes: e.target.value })}
+            onBlur={(e) => saveField('notes', e.target.value)}
+            placeholder="Parking, keys, heating, access notes..."
+            className="w-full p-3 border-2 rounded-lg mt-1"
+            rows={3}
+          />
+        </div>
+
+        {/* Job History */}
+        <div className="border-t-2 pt-4">
+          <h3 className="font-bold text-xl mb-3">📋 Job History ({history.length})</h3>
+          {history.length === 0 ? (
+            <p className="text-gray-400 italic">No jobs yet</p>
+          ) : (
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              {history.map(booking => {
+                const color = getJobTypeColor(booking.type);
+                return (
+                  <div
+                    key={booking.id}
+                    className={`p-4 rounded-lg border-l-4 ${
+                      color === 'blue' ? 'bg-blue-50 border-blue-500' :
+                      color === 'orange' ? 'bg-orange-50 border-orange-500' :
+                      'bg-red-50 border-red-500'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="font-bold">
+                          {new Date(booking.date).toLocaleDateString('en-GB', {
+                            weekday: 'short', day: 'numeric', month: 'short', year: 'numeric'
+                          })}
+                        </div>
+                        <div className="text-sm text-gray-600">{getJobTypeLabel(booking.type)}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold text-lg">£{booking.price}</div>
+                        <div className="text-sm">
+                          {booking.status === 'paid' ? (
+                            <span className="text-green-600">✓ Paid</span>
+                          ) : booking.status === 'invoiced' ? (
+                            <span className="text-blue-600">Invoiced</span>
+                          ) : booking.status === 'completed' ? (
+                            <span className="text-amber-600">Done - needs invoice</span>
+                          ) : (
+                            <span className="text-gray-500">Scheduled</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // ============================================================
+  // MAIN RENDER
+  // ============================================================
+  
+  return (
+    <div className="min-h-screen bg-gray-100 p-3 flex flex-col">
+      {/* Header */}
+      <div className="bg-white rounded-lg shadow-lg p-4 mb-3 no-print">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <h1 className="text-3xl font-bold">🎹 COMMAND CENTRE</h1>
+          
+          <div className="flex gap-2">
+            <button
+              onClick={() => { setView('planner'); setSelectedDay(null); setSelectedCustomer(null); }}
+              className={`px-5 py-3 rounded-lg text-lg font-bold touch-target ${
+                view === 'planner' ? 'bg-blue-600 text-white' : 'bg-gray-200'
+              }`}
+            >
+              📅 Planner
+            </button>
+            <button
+              onClick={() => { setView('customers'); setSelectedCustomer(null); }}
+              className={`px-5 py-3 rounded-lg text-lg font-bold touch-target ${
+                view.includes('customer') ? 'bg-blue-600 text-white' : 'bg-gray-200'
+              }`}
+            >
+              👥 Customers
+            </button>
+          </div>
+
+          {view === 'planner' && (
+            <div className="flex gap-2">
+              <button
+                onClick={() => setCurrentDate(new Date(currentYear - 1, 0, 1))}
+                className="px-4 py-3 rounded-lg text-lg font-medium bg-gray-200 touch-target"
+              >
+                ← {currentYear - 1}
+              </button>
+              <button
+                onClick={() => setCurrentDate(new Date())}
+                className="px-4 py-3 rounded-lg text-lg font-medium bg-gray-800 text-white touch-target"
+              >
+                {currentYear}
+              </button>
+              <button
+                onClick={() => setCurrentDate(new Date(currentYear + 1, 0, 1))}
+                className="px-4 py-3 rounded-lg text-lg font-medium bg-gray-200 touch-target"
+              >
+                {currentYear + 1} →
+              </button>
+            </div>
+          )}
+
+          <div className="flex gap-3 items-center">
+            <div className="text-sm bg-blue-100 text-blue-800 px-3 py-2 rounded-lg font-medium">
+              🔵 {stats.tuningDays} tuning
+            </div>
+            <div className="text-sm bg-orange-100 text-orange-800 px-3 py-2 rounded-lg font-medium">
+              🟠 {stats.faultDays} fault
+            </div>
+            <div className="text-sm bg-red-100 text-red-800 px-3 py-2 rounded-lg font-medium">
+              🔴 {stats.bigDays} big
+            </div>
+            <button
+              onClick={loadData}
+              className="px-4 py-3 rounded-lg bg-gray-600 text-white text-lg touch-target"
+              title="Refresh data"
+            >
+              🔄
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      {view === 'planner' && (
+        <div className="flex gap-3 flex-1">
+          <JobsDuePanel />
+          <div className="flex-1">
+            <YearView />
+          </div>
+          {selectedDay && <DayPanel date={selectedDay} onClose={() => setSelectedDay(null)} />}
+        </div>
+      )}
+
+      {view === 'customers' && <CustomerListView />}
+      {view === 'customerDetail' && selectedCustomer && <CustomerDetailView />}
+    </div>
+  );
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<CommandCentre />);
+  </script>
+</body>
+</html>
