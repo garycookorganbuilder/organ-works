@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Van QR Code</title>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -15,22 +14,21 @@
     }
     h1 { margin-bottom: 10px; }
     p { color: #666; margin-bottom: 30px; }
-    #qrcode {
+    .qr-container {
       display: inline-block;
       padding: 20px;
       background: white;
       border: 4px solid #000;
       border-radius: 12px;
     }
-    #qrcode canvas { display: block; }
     .label {
       margin-top: 20px;
-      font-size: 24px;
+      font-size: 28px;
       font-weight: bold;
     }
     .url {
       margin-top: 10px;
-      font-size: 12px;
+      font-size: 11px;
       color: #888;
       word-break: break-all;
     }
@@ -54,7 +52,9 @@
   <h1 class="no-print">🚐 Van QR Code</h1>
   <p class="no-print">Print this and stick it in the van. Scan when you arrive on site.</p>
   
-  <div id="qrcode"></div>
+  <div class="qr-container">
+    <img id="qrImage" src="" alt="QR Code" width="300" height="300">
+  </div>
   <div class="label">📍 ON SITE</div>
   <div class="url" id="urlDisplay"></div>
   
@@ -67,17 +67,9 @@
     
     document.getElementById('urlDisplay').textContent = TRACKER_URL;
     
-    QRCode.toCanvas(document.createElement('canvas'), TRACKER_URL, {
-      width: 300,
-      margin: 2,
-      color: { dark: '#000000', light: '#ffffff' }
-    }, function(error, canvas) {
-      if (error) {
-        console.error(error);
-        return;
-      }
-      document.getElementById('qrcode').appendChild(canvas);
-    });
+    // Use QR Server API to generate QR code (free, no API key needed)
+    const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(TRACKER_URL);
+    document.getElementById('qrImage').src = qrUrl;
   </script>
 </body>
 </html>
