@@ -161,6 +161,12 @@ const CommandCentre = () => {
   const [newMaterialQty, setNewMaterialQty] = useState(1);
   const [selectedMaterial, setSelectedMaterial] = useState(null); // {name, price}
 
+  // Project allocation mode
+  const [allocatingProject, setAllocatingProject] = useState(null); // {id, name, customerId} being allocated
+  const [showNewProject, setShowNewProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectCustomer, setNewProjectCustomer] = useState(null);
+
   // Current year for planner
   const currentYear = currentDate.getFullYear();
   
@@ -253,6 +259,7 @@ const CommandCentre = () => {
     if (type === 'OTS') return 'On-site (with helper)';
     if (type === 'TSC') return 'Solo Site Work';
     if (type === 'WS') return 'Workshop';
+    if (type === 'project') return 'Project Day';
     // Legacy types
     if (type === 'tuning_full') return 'Tuning (Full Day)';
     if (type === 'tuning_half') return 'Tuning (Half Day)';
@@ -266,6 +273,7 @@ const CommandCentre = () => {
     if (type === 'OTS') return 'blue';
     if (type === 'TSC') return 'green';
     if (type === 'WS') return 'purple';
+    if (type === 'project') return 'pink';
     // Legacy types for existing bookings
     if (type?.startsWith('tuning')) return 'blue';
     if (type === 'fault') return 'orange';
@@ -317,6 +325,28 @@ const CommandCentre = () => {
   };
 
   const jobsDue = getJobsDue();
+
+  // Get active projects (grouped from project bookings)
+  const getActiveProjects = () => {
+    const projectMap = {};
+    bookings
+      .filter(b => b.type === 'project')
+      .forEach(b => {
+        if (!projectMap[b.projectId]) {
+          projectMap[b.projectId] = {
+            id: b.projectId,
+            name: b.projectName,
+            customerId: b.customerId,
+            customerName: customers.find(c => c.id === b.customerId)?.name || 'Unknown',
+            days: []
+          };
+        }
+        projectMap[b.projectId].days.push(b.date);
+      });
+    return Object.values(projectMap);
+  };
+  
+  const activeProjects = getActiveProjects();
 
   // ============================================================
   // BOOKING FUNCTIONS
@@ -434,9 +464,84 @@ const CommandCentre = () => {
     }
   };
 
+  // Project allocation functions
+  const createProject = async () => {
+    if (!newProjectName || !newProjectCustomer) return;
+    
+    const projectId = 'PRJ' + Date.now();
+    setAllocatingProject({
+      id: projectId,
+      name: newProjectName,
+      customerId: newProjectCustomer.id,
+      customerName: newProjectCustomer.name
+    });
+    setShowNewProject(false);
+    setNewProjectName('');
+    setNewProjectCustomer(null);
+  };
+
+  const toggleProjectDay = async (dateStr) => {
+    if (!allocatingProject) return;
+    
+    // Check if this day is already allocated to this project
+    const existingBooking = bookings.find(b => 
+      b.type === 'project' && 
+      b.projectId === allocatingProject.id && 
+      b.date === dateStr
+    );
+    
+    setSaving(true);
+    try {
+      if (existingBooking) {
+        // Remove allocation
+        await apiCall('deleteBooking', { bookingId: existingBooking.id });
+        setBookings(bookings.filter(b => b.id !== existingBooking.id));
+      } else {
+        // Add allocation
+        const result = await apiCall('addBooking', {
+          data: {
+            date: dateStr,
+            customerId: allocatingProject.customerId,
+            type: 'project',
+            serviceType: 'project',
+            projectId: allocatingProject.id,
+            projectName: allocatingProject.name,
+            price: 0,
+            status: 'scheduled',
+            notes: allocatingProject.name
+          }
+        });
+        
+        setBookings([...bookings, {
+          id: result.id,
+          date: dateStr,
+          customerId: allocatingProject.customerId,
+          type: 'project',
+          serviceType: 'project',
+          projectId: allocatingProject.id,
+          projectName: allocatingProject.name,
+          price: 0,
+          status: 'scheduled',
+          notes: allocatingProject.name
+        }]);
+      }
+      setLastSaved(new Date());
+    } catch (err) {
+      alert('Failed to update project day: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleDayClick = (dateStr, year, month, day) => {
     if (!isWorkDay(year, month, day)) return;
     if (isDayOff(dateStr)) return;
+    
+    // Project allocation mode
+    if (allocatingProject) {
+      toggleProjectDay(dateStr);
+      return;
+    }
     
     if (selectedCustomerToBook) {
       const price = customQuote ? parseFloat(customQuote) : 0; // Price calculated later from hours
@@ -775,7 +880,7 @@ const CommandCentre = () => {
       )}
 
       {/* Add request button */}
-      {!showAddTicket && !selectedCustomerToBook && (
+      {!showAddTicket && !selectedCustomerToBook && !allocatingProject && (
         <button
           onClick={() => setShowAddTicket(true)}
           className="w-full py-3 mb-3 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg font-medium touch-target border-2 border-red-300"
@@ -783,6 +888,97 @@ const CommandCentre = () => {
           + Log Fault / Request
         </button>
       )}
+
+      {/* Projects section */}
+      <div className="mb-4">
+        <div className="flex justify-between items-center mb-2">
+          <h2 className="text-lg font-bold">🔧 Big Jobs</h2>
+          {!allocatingProject && (
+            <button
+              onClick={() => setShowNewProject(true)}
+              className="text-sm bg-purple-100 hover:bg-purple-200 text-purple-700 px-3 py-1 rounded"
+            >
+              + New
+            </button>
+          )}
+        </div>
+        
+        {/* New project form */}
+        {showNewProject && (
+          <div className="bg-purple-50 border-2 border-purple-300 rounded-lg p-3 mb-2">
+            <input
+              type="text"
+              placeholder="Project name..."
+              value={newProjectName}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              className="w-full p-2 border rounded mb-2"
+            />
+            <input
+              type="text"
+              placeholder="Search customer..."
+              value={newProjectCustomer?.name || ''}
+              onChange={(e) => {
+                const search = e.target.value.toLowerCase();
+                const found = customers.find(c => c.name.toLowerCase().includes(search));
+                setNewProjectCustomer(found || null);
+              }}
+              className="w-full p-2 border rounded mb-2"
+              list="project-customers"
+            />
+            <datalist id="project-customers">
+              {customers.map(c => <option key={c.id} value={c.name} />)}
+            </datalist>
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setShowNewProject(false); setNewProjectName(''); setNewProjectCustomer(null); }}
+                className="flex-1 py-2 bg-gray-200 rounded"
+              >Cancel</button>
+              <button
+                onClick={createProject}
+                disabled={!newProjectName || !newProjectCustomer}
+                className="flex-1 py-2 bg-purple-500 text-white rounded disabled:opacity-50"
+              >Start Allocating</button>
+            </div>
+          </div>
+        )}
+        
+        {/* Allocation mode banner */}
+        {allocatingProject && (
+          <div className="bg-purple-500 text-white rounded-lg p-3 mb-2">
+            <div className="font-bold">📍 Allocating Days</div>
+            <div className="text-sm">{allocatingProject.name}</div>
+            <div className="text-sm opacity-80">{allocatingProject.customerName}</div>
+            <div className="text-xs mt-2 opacity-80">Tap days to add/remove</div>
+            <button
+              onClick={() => setAllocatingProject(null)}
+              className="mt-2 w-full py-2 bg-white text-purple-700 rounded font-medium"
+            >
+              Done
+            </button>
+          </div>
+        )}
+        
+        {/* Active projects list */}
+        {!showNewProject && !allocatingProject && activeProjects.length > 0 && (
+          <div className="space-y-2">
+            {activeProjects.map(project => (
+              <div
+                key={project.id}
+                onClick={() => setAllocatingProject(project)}
+                className="bg-purple-50 border-2 border-purple-200 rounded-lg p-3 cursor-pointer hover:border-purple-400"
+              >
+                <div className="font-medium">{project.name}</div>
+                <div className="text-sm text-gray-600">{project.customerName}</div>
+                <div className="text-sm text-purple-600">{project.days.length} days allocated</div>
+              </div>
+            ))}
+          </div>
+        )}
+        
+        {!showNewProject && !allocatingProject && activeProjects.length === 0 && (
+          <div className="text-gray-400 text-sm">No active projects</div>
+        )}
+      </div>
 
       <h2 className="text-xl font-bold mb-3">📋 Tunings Due</h2>
 
@@ -874,7 +1070,7 @@ const CommandCentre = () => {
                 const hasBooking = dayBookings.length > 0;
                 const firstBookingType = hasBooking ? dayBookings[0].type : null;
                 const color = firstBookingType ? getJobTypeColor(firstBookingType) : null;
-                const isSelecting = selectedCustomerToBook !== null;
+                const isSelecting = selectedCustomerToBook !== null || allocatingProject !== null;
 
                 let cellClass = 'text-center border transition-all cursor-pointer ';
                 if (!isWork) cellClass += 'bg-gray-100 dim-when-booking';
@@ -882,6 +1078,7 @@ const CommandCentre = () => {
                 else if (color === 'blue') cellClass += 'bg-blue-500 text-white';
                 else if (color === 'green') cellClass += 'bg-emerald-500 text-white';
                 else if (color === 'purple') cellClass += 'bg-purple-500 text-white';
+                else if (color === 'pink') cellClass += 'bg-pink-400 text-white';
                 else if (color === 'orange') cellClass += 'bg-orange-400 text-white';
                 else if (color === 'red') cellClass += 'bg-red-500 text-white';
                 else cellClass += isSelecting ? 'bg-green-200 hover:bg-green-300' : 'bg-green-50 hover:bg-green-100';
@@ -895,6 +1092,7 @@ const CommandCentre = () => {
                     <div className="w-8 h-8 flex items-center justify-center mx-auto text-sm font-bold">
                       {hasBooking ? (
                         dayBookings.length > 1 ? dayBookings.length : 
+                        firstBookingType === 'project' ? 'P' :
                         firstBookingType?.startsWith('tuning') ? 'T' : 
                         firstBookingType === 'fault' ? 'F' : 'B'
                       ) : isWork && !isOff ? '·' : ''}
@@ -907,10 +1105,10 @@ const CommandCentre = () => {
         </tbody>
       </table>
       
-      <div className="flex gap-6 p-4 bg-gray-100 border-t text-sm">
+      <div className="flex gap-6 p-4 bg-gray-100 border-t text-sm flex-wrap">
         <div className="flex items-center gap-2"><div className="w-6 h-6 bg-blue-500 rounded"></div> Tuning</div>
         <div className="flex items-center gap-2"><div className="w-6 h-6 bg-orange-400 rounded"></div> Fault</div>
-        <div className="flex items-center gap-2"><div className="w-6 h-6 bg-red-500 rounded"></div> Big Job</div>
+        <div className="flex items-center gap-2"><div className="w-6 h-6 bg-pink-400 rounded"></div> Project</div>
         <div className="flex items-center gap-2"><div className="w-6 h-6 bg-green-100 border rounded"></div> Available</div>
         <div className="flex items-center gap-2"><div className="w-6 h-6 bg-yellow-200 rounded"></div> Day off</div>
         <div className="flex items-center gap-2"><div className="w-6 h-6 bg-gray-200 rounded"></div> Weekend</div>
@@ -954,6 +1152,7 @@ const CommandCentre = () => {
             {dayBookings.map((booking) => {
               const customer = getCustomerById(booking.customerId);
               const color = getJobTypeColor(booking.type);
+              const isProject = booking.type === 'project';
               return (
                 <div
                   key={booking.id}
@@ -961,18 +1160,20 @@ const CommandCentre = () => {
                     color === 'blue' ? 'bg-blue-100 border-l-4 border-blue-500' :
                     color === 'green' ? 'bg-emerald-100 border-l-4 border-emerald-500' :
                     color === 'purple' ? 'bg-purple-100 border-l-4 border-purple-500' :
+                    color === 'pink' ? 'bg-pink-100 border-l-4 border-pink-500' :
                     color === 'orange' ? 'bg-orange-100 border-l-4 border-orange-500' :
                     'bg-red-100 border-l-4 border-red-500'
                   }`}
                 >
                   <div className="flex justify-between items-start">
                     <div>
-                      <div className="font-bold text-lg">{customer?.name}</div>
+                      <div className="font-bold text-lg">{isProject ? booking.projectName : customer?.name}</div>
+                      {isProject && <div className="text-sm text-gray-600">{customer?.name}</div>}
                       <div className="text-sm text-gray-500 mt-1">{getJobTypeLabel(booking.type)}</div>
-                      {booking.notes && <div className="text-sm italic mt-1">{booking.notes}</div>}
+                      {booking.notes && !isProject && <div className="text-sm italic mt-1">{booking.notes}</div>}
                     </div>
                     <div className="text-right">
-                      <div className="font-bold text-lg">£{booking.price}</div>
+                      {!isProject && <div className="font-bold text-lg">£{booking.price}</div>}
                       <button
                         onClick={() => removeBooking(date, booking.id)}
                         className="text-red-500 text-sm hover:text-red-700 mt-2"
@@ -982,7 +1183,8 @@ const CommandCentre = () => {
                     </div>
                   </div>
                   
-                  {/* Status buttons */}
+                  {/* Status buttons - only for non-project bookings */}
+                  {!isProject && (
                   <div className="mt-3 pt-2 border-t flex gap-2 flex-wrap">
                     {booking.status === 'scheduled' && (
                       <button
@@ -1037,6 +1239,7 @@ const CommandCentre = () => {
                       <span className="text-sm bg-green-500 text-white px-4 py-2 rounded-lg">✓ Paid</span>
                     )}
                   </div>
+                  )}
                 </div>
               );
             })}
