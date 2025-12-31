@@ -185,6 +185,108 @@
       opacity: 0.5;
     }
     
+    .materials-section {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #333;
+    }
+    
+    .materials-title {
+      font-size: 14px;
+      color: #888;
+      margin-bottom: 8px;
+    }
+    
+    .material-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #0f172a;
+      padding: 8px 12px;
+      border-radius: 8px;
+      margin-bottom: 6px;
+    }
+    
+    .material-item .desc {
+      color: #ccc;
+    }
+    
+    .material-item .cost {
+      color: #4ade80;
+      font-weight: bold;
+    }
+    
+    .material-item .remove-btn {
+      color: #ef4444;
+      background: none;
+      border: none;
+      font-size: 18px;
+      padding: 0 0 0 12px;
+      cursor: pointer;
+    }
+    
+    .add-material {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    
+    .add-material input {
+      padding: 10px;
+      border: 2px solid #333;
+      border-radius: 8px;
+      background: #0f172a;
+      color: #fff;
+      font-size: 14px;
+    }
+    
+    .add-material input.desc-input {
+      flex: 1;
+    }
+    
+    .add-material input.cost-input {
+      width: 80px;
+    }
+    
+    .add-material button {
+      padding: 10px 16px;
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: bold;
+    }
+    
+    .materials-total {
+      margin-top: 8px;
+      text-align: right;
+      color: #4ade80;
+      font-weight: bold;
+    }
+    
+    .quick-pick {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 10px 0;
+    }
+    
+    .quick-pick-btn {
+      padding: 8px 12px;
+      background: #1e3a5f;
+      border: 1px solid #3b82f6;
+      border-radius: 20px;
+      color: #93c5fd;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    
+    .quick-pick-btn:active {
+      background: #3b82f6;
+      color: #fff;
+    }
+    
     .config-panel {
       background: #16213e;
       border-radius: 16px;
@@ -266,6 +368,8 @@
     let bookings = [];
     let customers = [];
     let activeTimers = {}; // bookingId -> startTime
+    let bookingMaterials = {}; // bookingId -> [{description, cost}]
+    let materialsList = []; // quick-pick list from sheet
     let elapsedIntervals = {};
     
     // Init
@@ -325,6 +429,7 @@
       try {
         const data = await apiCall('getAllData');
         customers = data.customers || [];
+        materialsList = data.materialsList || [];
         
         // Get today's date string
         const today = new Date();
@@ -336,6 +441,19 @@
         bookings = (data.bookings || []).filter(b => {
           const bookingDate = b.date ? b.date.split('T')[0] : '';
           return bookingDate === todayStr;
+        });
+        
+        // Load existing materials for each booking
+        bookings.forEach(b => {
+          if (b.materials) {
+            try {
+              bookingMaterials[b.id] = JSON.parse(b.materials);
+            } catch (e) {
+              bookingMaterials[b.id] = [];
+            }
+          } else {
+            bookingMaterials[b.id] = [];
+          }
         });
         
         renderBookings();
@@ -449,6 +567,46 @@
           html += `<button class="btn btn-done" disabled>✓ Complete</button>`;
         }
         
+        // Materials section (show when active or completed)
+        if (isActive || isCompleted) {
+          const materials = bookingMaterials[booking.id] || [];
+          const materialsTotal = materials.reduce((sum, m) => sum + (parseFloat(m.cost) || 0), 0);
+          
+          html += `<div class="materials-section">`;
+          html += `<div class="materials-title">🔧 Materials / Parts</div>`;
+          
+          // List existing materials
+          materials.forEach((mat, idx) => {
+            html += `<div class="material-item">
+              <span class="desc">${mat.description}</span>
+              <span class="cost">£${parseFloat(mat.cost).toFixed(2)}</span>
+              <button class="remove-btn" onclick="removeMaterial('${booking.id}', ${idx})">✕</button>
+            </div>`;
+          });
+          
+          // Quick-pick buttons
+          if (materialsList.length > 0) {
+            html += `<div class="quick-pick">`;
+            materialsList.forEach(mat => {
+              html += `<button class="quick-pick-btn" onclick="quickAddMaterial('${booking.id}', '${mat.name.replace(/'/g, "\\'")}', ${mat.price})">${mat.name} £${parseFloat(mat.price).toFixed(2)}</button>`;
+            });
+            html += `</div>`;
+          }
+          
+          // Add material form (manual)
+          html += `<div class="add-material">
+            <input type="text" class="desc-input" id="mat-desc-${booking.id}" placeholder="Other...">
+            <input type="number" class="cost-input" id="mat-cost-${booking.id}" placeholder="£">
+            <button onclick="addMaterial('${booking.id}')">+</button>
+          </div>`;
+          
+          if (materialsTotal > 0) {
+            html += `<div class="materials-total">Total: £${materialsTotal.toFixed(2)}</div>`;
+          }
+          
+          html += `</div>`;
+        }
+        
         html += '</div>';
       });
       
@@ -537,6 +695,71 @@
       }
       
       renderBookings();
+    }
+    
+    async function addMaterial(bookingId) {
+      const descInput = document.getElementById(`mat-desc-${bookingId}`);
+      const costInput = document.getElementById(`mat-cost-${bookingId}`);
+      
+      const description = descInput.value.trim();
+      const cost = parseFloat(costInput.value);
+      
+      if (!description || isNaN(cost) || cost <= 0) {
+        alert('Please enter description and cost');
+        return;
+      }
+      
+      // Add to local state
+      if (!bookingMaterials[bookingId]) {
+        bookingMaterials[bookingId] = [];
+      }
+      bookingMaterials[bookingId].push({ description, cost });
+      
+      // Clear inputs
+      descInput.value = '';
+      costInput.value = '';
+      
+      // Save to database
+      await saveMaterials(bookingId);
+      
+      renderBookings();
+    }
+    
+    async function quickAddMaterial(bookingId, description, cost) {
+      // Add to local state
+      if (!bookingMaterials[bookingId]) {
+        bookingMaterials[bookingId] = [];
+      }
+      bookingMaterials[bookingId].push({ description, cost });
+      
+      // Save to database
+      await saveMaterials(bookingId);
+      
+      renderBookings();
+    }
+    
+    async function removeMaterial(bookingId, index) {
+      if (!bookingMaterials[bookingId]) return;
+      
+      bookingMaterials[bookingId].splice(index, 1);
+      
+      await saveMaterials(bookingId);
+      
+      renderBookings();
+    }
+    
+    async function saveMaterials(bookingId) {
+      try {
+        await apiCall('updateBooking', {
+          data: {
+            id: bookingId,
+            materials: JSON.stringify(bookingMaterials[bookingId] || [])
+          }
+        });
+      } catch (err) {
+        console.error('Failed to save materials:', err);
+        alert('Failed to save materials. Check connection.');
+      }
     }
   </script>
 </body>
