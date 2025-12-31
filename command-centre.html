@@ -150,6 +150,10 @@ const CommandCentre = () => {
   const [showInvoiceCalc, setShowInvoiceCalc] = useState(null); // booking object or null
   const [selectedBand, setSelectedBand] = useState(null);
   const [pricing, setPricing] = useState({ timeBands: [], distanceBands: [] });
+  const [invoiceMaterials, setInvoiceMaterials] = useState([]); // [{description, cost}]
+  const [newMaterialDesc, setNewMaterialDesc] = useState('');
+  const [newMaterialCost, setNewMaterialCost] = useState('');
+  const [materialsList, setMaterialsList] = useState([]); // quick-pick from sheet
 
   // Current year for planner
   const currentYear = currentDate.getFullYear();
@@ -193,6 +197,7 @@ const CommandCentre = () => {
       setDaysOff((data.daysOff || []).map(d => d.date));
       setTickets(data.tickets || []);
       setPricing(data.pricing || { timeBands: [], distanceBands: [] });
+      setMaterialsList(data.materialsList || []);
       
     } catch (err) {
       console.error('Failed to load data:', err);
@@ -984,6 +989,18 @@ const CommandCentre = () => {
                           const actualHours = parseFloat(booking.actualHours) || 0;
                           const suggestedBand = Math.max(4, Math.ceil(actualHours));
                           setSelectedBand(suggestedBand);
+                          // Load existing materials from booking
+                          let existingMaterials = [];
+                          if (booking.materials) {
+                            try {
+                              existingMaterials = JSON.parse(booking.materials);
+                            } catch (e) {
+                              existingMaterials = [];
+                            }
+                          }
+                          setInvoiceMaterials(existingMaterials);
+                          setNewMaterialDesc('');
+                          setNewMaterialCost('');
                           setShowInvoiceCalc({ ...booking, distance, actualHours });
                         }}
                         className="text-sm bg-amber-200 px-4 py-2 rounded-lg hover:bg-amber-300 touch-target"
@@ -1426,6 +1443,73 @@ const CommandCentre = () => {
               </div>
             </div>
             
+            {/* Materials */}
+            <div className="bg-gray-100 rounded-lg p-4 mb-4">
+              <div className="text-sm text-gray-600 mb-2">Materials / Parts</div>
+              
+              {invoiceMaterials.length > 0 && (
+                <div className="space-y-1 mb-3">
+                  {invoiceMaterials.map((mat, idx) => (
+                    <div key={idx} className="flex justify-between items-center bg-white p-2 rounded">
+                      <span className="text-sm">{mat.description}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">£{mat.cost}</span>
+                        <button 
+                          onClick={() => setInvoiceMaterials(invoiceMaterials.filter((_, i) => i !== idx))}
+                          className="text-red-500 text-sm"
+                        >✕</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              
+              {/* Quick-pick buttons */}
+              {materialsList.length > 0 && (
+                <div className="flex flex-wrap gap-1 mb-3">
+                  {materialsList.map((mat, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setInvoiceMaterials([...invoiceMaterials, { description: mat.name, cost: mat.price }])}
+                      className="px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded text-xs"
+                    >
+                      {mat.name} £{parseFloat(mat.price).toFixed(2)}
+                    </button>
+                  ))}
+                </div>
+              )}
+              
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Other..."
+                  value={newMaterialDesc}
+                  onChange={(e) => setNewMaterialDesc(e.target.value)}
+                  className="flex-1 p-2 border rounded text-sm"
+                />
+                <input
+                  type="number"
+                  placeholder="£"
+                  value={newMaterialCost}
+                  onChange={(e) => setNewMaterialCost(e.target.value)}
+                  className="w-20 p-2 border rounded text-sm"
+                />
+                <button
+                  onClick={() => {
+                    if (newMaterialDesc && newMaterialCost) {
+                      setInvoiceMaterials([...invoiceMaterials, {
+                        description: newMaterialDesc,
+                        cost: parseFloat(newMaterialCost)
+                      }]);
+                      setNewMaterialDesc('');
+                      setNewMaterialCost('');
+                    }
+                  }}
+                  className="px-3 py-2 bg-blue-500 text-white rounded text-sm font-medium"
+                >+</button>
+              </div>
+            </div>
+            
             {/* Total */}
             {(() => {
               const serviceType = showInvoiceCalc.serviceType || showInvoiceCalc.type || 'TSC';
@@ -1435,7 +1519,8 @@ const CommandCentre = () => {
                 (showInvoiceCalc.distance || 0) >= d.minMiles && 
                 (showInvoiceCalc.distance || 0) <= d.maxMiles
               )?.premium || 0;
-              const total = serviceCharge + distancePremium;
+              const materialsTotal = invoiceMaterials.reduce((sum, m) => sum + m.cost, 0);
+              const total = serviceCharge + distancePremium + materialsTotal;
               
               return (
                 <div className="border-t-2 pt-4 mb-4">
@@ -1447,6 +1532,12 @@ const CommandCentre = () => {
                     <span>Distance</span>
                     <span>+£{distancePremium}</span>
                   </div>
+                  {materialsTotal > 0 && (
+                    <div className="flex justify-between text-lg">
+                      <span>Materials</span>
+                      <span>+£{materialsTotal}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-2xl font-bold mt-2 pt-2 border-t">
                     <span>Total</span>
                     <span className="text-green-600">£{total}</span>
@@ -1472,7 +1563,8 @@ const CommandCentre = () => {
                     (showInvoiceCalc.distance || 0) >= d.minMiles && 
                     (showInvoiceCalc.distance || 0) <= d.maxMiles
                   )?.premium || 0;
-                  const total = serviceCharge + distancePremium;
+                  const materialsTotal = invoiceMaterials.reduce((sum, m) => sum + m.cost, 0);
+                  const total = serviceCharge + distancePremium + materialsTotal;
                   
                   // Update booking with price and status
                   setSaving(true);
@@ -1482,13 +1574,14 @@ const CommandCentre = () => {
                         id: showInvoiceCalc.id,
                         price: total,
                         status: 'invoiced',
+                        materials: JSON.stringify(invoiceMaterials),
                         invoiceDate: new Date().toISOString().split('T')[0]
                       }
                     });
                     
                     setBookings(bookings.map(b => 
                       b.id === showInvoiceCalc.id 
-                        ? { ...b, price: total, status: 'invoiced', invoiceDate: new Date().toISOString().split('T')[0] }
+                        ? { ...b, price: total, status: 'invoiced', materials: JSON.stringify(invoiceMaterials), invoiceDate: new Date().toISOString().split('T')[0] }
                         : b
                     ));
                     setShowInvoiceCalc(null);
@@ -1509,7 +1602,8 @@ const CommandCentre = () => {
                     (showInvoiceCalc.distance || 0) >= d.minMiles && 
                     (showInvoiceCalc.distance || 0) <= d.maxMiles
                   )?.premium || 0;
-                  return serviceCharge + distancePremium;
+                  const materialsTotal = invoiceMaterials.reduce((sum, m) => sum + m.cost, 0);
+                  return serviceCharge + distancePremium + materialsTotal;
                 })()}
               </button>
             </div>
