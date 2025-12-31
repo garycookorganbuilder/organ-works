@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>On Site</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #fff;
+      margin: 0;
+      padding: 16px;
+      min-height: 100vh;
+    }
+    
+    .header {
+      text-align: center;
+      padding: 20px 0;
+      border-bottom: 2px solid #333;
+      margin-bottom: 20px;
+    }
+    
+    .header h1 {
+      margin: 0;
+      font-size: 28px;
+    }
+    
+    .date {
+      color: #888;
+      font-size: 18px;
+      margin-top: 8px;
+    }
+    
+    .loading {
+      text-align: center;
+      padding: 60px 20px;
+    }
+    
+    .spinner {
+      width: 50px;
+      height: 50px;
+      border: 4px solid #333;
+      border-top-color: #4ade80;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 20px;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .no-jobs {
+      text-align: center;
+      padding: 60px 20px;
+      color: #888;
+    }
+    
+    .no-jobs .icon {
+      font-size: 60px;
+      margin-bottom: 20px;
+    }
+    
+    .job-card {
+      background: #16213e;
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 16px;
+      border-left: 6px solid #3b82f6;
+    }
+    
+    .job-card.fault {
+      border-left-color: #f97316;
+    }
+    
+    .job-card.active {
+      border-left-color: #4ade80;
+      background: #1a3a2e;
+    }
+    
+    .job-card.completed {
+      border-left-color: #666;
+      opacity: 0.6;
+    }
+    
+    .customer-name {
+      font-size: 22px;
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
+    
+    .job-type {
+      color: #888;
+      font-size: 16px;
+      margin-bottom: 4px;
+    }
+    
+    .job-notes {
+      color: #aaa;
+      font-size: 14px;
+      font-style: italic;
+      margin-top: 8px;
+    }
+    
+    .distance {
+      color: #60a5fa;
+      font-size: 14px;
+      margin-top: 4px;
+    }
+    
+    .time-info {
+      background: #0f172a;
+      border-radius: 8px;
+      padding: 12px;
+      margin-top: 12px;
+      font-size: 16px;
+    }
+    
+    .time-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+    }
+    
+    .time-label {
+      color: #888;
+    }
+    
+    .time-value {
+      font-weight: bold;
+      color: #4ade80;
+    }
+    
+    .elapsed {
+      font-size: 32px;
+      text-align: center;
+      color: #4ade80;
+      padding: 16px 0;
+      font-family: monospace;
+    }
+    
+    .btn {
+      width: 100%;
+      padding: 20px;
+      font-size: 22px;
+      font-weight: bold;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      margin-top: 16px;
+      min-height: 70px;
+    }
+    
+    .btn-start {
+      background: #4ade80;
+      color: #000;
+    }
+    
+    .btn-stop {
+      background: #ef4444;
+      color: #fff;
+    }
+    
+    .btn-done {
+      background: #666;
+      color: #fff;
+    }
+    
+    .btn:disabled {
+      opacity: 0.5;
+    }
+    
+    .config-panel {
+      background: #16213e;
+      border-radius: 16px;
+      padding: 20px;
+      margin-top: 40px;
+    }
+    
+    .config-panel h3 {
+      margin-top: 0;
+      color: #888;
+      font-size: 14px;
+      text-transform: uppercase;
+    }
+    
+    .config-panel input {
+      width: 100%;
+      padding: 12px;
+      font-size: 14px;
+      border: 2px solid #333;
+      border-radius: 8px;
+      background: #0f172a;
+      color: #fff;
+      margin-bottom: 12px;
+    }
+    
+    .config-panel button {
+      width: 100%;
+      padding: 12px;
+      font-size: 16px;
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    
+    .refresh-btn {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      background: #333;
+      border: none;
+      color: #fff;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      font-size: 20px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <button class="refresh-btn" onclick="loadTodaysBookings()">🔄</button>
+  
+  <div class="header">
+    <h1>📍 On Site</h1>
+    <div class="date" id="todayDate"></div>
+  </div>
+  
+  <div id="content">
+    <div class="loading">
+      <div class="spinner"></div>
+      <div>Loading today's jobs...</div>
+    </div>
+  </div>
+  
+  <div class="config-panel" id="configPanel" style="display: none;">
+    <h3>Setup</h3>
+    <input type="text" id="apiUrl" placeholder="Google Apps Script URL">
+    <button onclick="saveConfig()">Connect</button>
+  </div>
+
+  <script>
+    // Config
+    const getApiUrl = () => localStorage.getItem('organWorks_apiUrl') || '';
+    const setApiUrl = (url) => localStorage.setItem('organWorks_apiUrl', url);
+    
+    // State
+    let bookings = [];
+    let customers = [];
+    let activeTimers = {}; // bookingId -> startTime
+    let elapsedIntervals = {};
+    
+    // Init
+    document.addEventListener('DOMContentLoaded', () => {
+      const today = new Date();
+      document.getElementById('todayDate').textContent = today.toLocaleDateString('en-GB', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long'
+      });
+      
+      if (!getApiUrl()) {
+        document.getElementById('configPanel').style.display = 'block';
+        document.getElementById('content').innerHTML = '<div class="no-jobs"><div class="icon">⚙️</div><div>Enter your API URL below to connect</div></div>';
+      } else {
+        loadTodaysBookings();
+      }
+      
+      // Load any active timers from localStorage
+      const savedTimers = localStorage.getItem('organWorks_activeTimers');
+      if (savedTimers) {
+        activeTimers = JSON.parse(savedTimers);
+      }
+    });
+    
+    function saveConfig() {
+      const url = document.getElementById('apiUrl').value.trim();
+      if (url) {
+        setApiUrl(url);
+        document.getElementById('configPanel').style.display = 'none';
+        loadTodaysBookings();
+      }
+    }
+    
+    async function apiCall(action, params = {}) {
+      const API_URL = getApiUrl();
+      if (!API_URL) throw new Error('API URL not configured');
+      
+      const url = new URL(API_URL);
+      url.searchParams.set('action', action);
+      
+      Object.keys(params).forEach(key => {
+        if (typeof params[key] === 'object') {
+          url.searchParams.set(key, JSON.stringify(params[key]));
+        } else {
+          url.searchParams.set(key, params[key]);
+        }
+      });
+      
+      const response = await fetch(url.toString());
+      return await response.json();
+    }
+    
+    async function loadTodaysBookings() {
+      document.getElementById('content').innerHTML = '<div class="loading"><div class="spinner"></div><div>Loading...</div></div>';
+      
+      try {
+        const data = await apiCall('getAllData');
+        customers = data.customers || [];
+        
+        // Get today's date string
+        const today = new Date();
+        const todayStr = today.getFullYear() + '-' + 
+          String(today.getMonth() + 1).padStart(2, '0') + '-' + 
+          String(today.getDate()).padStart(2, '0');
+        
+        // Filter bookings for today
+        bookings = (data.bookings || []).filter(b => {
+          const bookingDate = b.date ? b.date.split('T')[0] : '';
+          return bookingDate === todayStr;
+        });
+        
+        renderBookings();
+        
+      } catch (err) {
+        document.getElementById('content').innerHTML = `
+          <div class="no-jobs">
+            <div class="icon">❌</div>
+            <div>Error: ${err.message}</div>
+          </div>
+        `;
+        document.getElementById('configPanel').style.display = 'block';
+      }
+    }
+    
+    function getCustomerById(id) {
+      return customers.find(c => c.id === id) || { name: 'Unknown' };
+    }
+    
+    function getJobTypeLabel(type) {
+      if (type === 'tuning_full') return 'Tuning (Full Day)';
+      if (type === 'tuning_half') return 'Tuning (Half Day)';
+      if (type === 'fault') return 'Fault Visit';
+      if (type === 'big') return 'Big Job';
+      return type || 'Tuning';
+    }
+    
+    function formatTime(date) {
+      return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    }
+    
+    function formatElapsed(ms) {
+      const totalSeconds = Math.floor(ms / 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+    
+    function renderBookings() {
+      if (bookings.length === 0) {
+        document.getElementById('content').innerHTML = `
+          <div class="no-jobs">
+            <div class="icon">📅</div>
+            <div>No jobs booked today</div>
+          </div>
+        `;
+        return;
+      }
+      
+      let html = '';
+      
+      bookings.forEach(booking => {
+        const customer = getCustomerById(booking.customerId);
+        const isActive = activeTimers[booking.id];
+        const isCompleted = booking.actualEndTime;
+        
+        let cardClass = 'job-card';
+        if (booking.type === 'fault') cardClass += ' fault';
+        if (isActive) cardClass += ' active';
+        if (isCompleted) cardClass += ' completed';
+        
+        html += `<div class="${cardClass}" id="card-${booking.id}">`;
+        html += `<div class="customer-name">${customer.name}</div>`;
+        html += `<div class="job-type">${getJobTypeLabel(booking.type)}</div>`;
+        
+        if (customer.distance) {
+          html += `<div class="distance">📍 ${customer.distance} miles from workshop</div>`;
+        }
+        
+        if (booking.notes) {
+          html += `<div class="job-notes">"${booking.notes}"</div>`;
+        }
+        
+        // Time info
+        if (isActive || isCompleted) {
+          html += '<div class="time-info">';
+          
+          if (isActive) {
+            const startTime = new Date(activeTimers[booking.id]);
+            html += `<div class="time-row"><span class="time-label">Started</span><span class="time-value">${formatTime(startTime)}</span></div>`;
+            html += `<div class="elapsed" id="elapsed-${booking.id}">0:00:00</div>`;
+          }
+          
+          if (isCompleted) {
+            const start = new Date(booking.actualStartTime);
+            const end = new Date(booking.actualEndTime);
+            const duration = (end - start) / (1000 * 60 * 60);
+            html += `<div class="time-row"><span class="time-label">Started</span><span class="time-value">${formatTime(start)}</span></div>`;
+            html += `<div class="time-row"><span class="time-label">Finished</span><span class="time-value">${formatTime(end)}</span></div>`;
+            html += `<div class="time-row"><span class="time-label">Duration</span><span class="time-value">${duration.toFixed(2)} hrs</span></div>`;
+          }
+          
+          html += '</div>';
+        }
+        
+        // Buttons
+        if (!isActive && !isCompleted) {
+          html += `<button class="btn btn-start" onclick="startJob('${booking.id}')">▶️ ARRIVED</button>`;
+        } else if (isActive) {
+          html += `<button class="btn btn-stop" onclick="stopJob('${booking.id}')">⏹️ FINISHED</button>`;
+        } else {
+          html += `<button class="btn btn-done" disabled>✓ Complete</button>`;
+        }
+        
+        html += '</div>';
+      });
+      
+      document.getElementById('content').innerHTML = html;
+      
+      // Start elapsed time counters for active jobs
+      Object.keys(activeTimers).forEach(bookingId => {
+        startElapsedCounter(bookingId);
+      });
+    }
+    
+    function startElapsedCounter(bookingId) {
+      if (elapsedIntervals[bookingId]) {
+        clearInterval(elapsedIntervals[bookingId]);
+      }
+      
+      const startTime = new Date(activeTimers[bookingId]);
+      const el = document.getElementById(`elapsed-${bookingId}`);
+      
+      if (el) {
+        elapsedIntervals[bookingId] = setInterval(() => {
+          const now = new Date();
+          const elapsed = now - startTime;
+          el.textContent = formatElapsed(elapsed);
+        }, 1000);
+      }
+    }
+    
+    async function startJob(bookingId) {
+      const now = new Date();
+      activeTimers[bookingId] = now.toISOString();
+      localStorage.setItem('organWorks_activeTimers', JSON.stringify(activeTimers));
+      
+      // Update booking in database
+      try {
+        await apiCall('updateBooking', {
+          data: {
+            id: bookingId,
+            actualStartTime: now.toISOString(),
+            status: 'in_progress'
+          }
+        });
+      } catch (err) {
+        console.error('Failed to update booking:', err);
+      }
+      
+      renderBookings();
+    }
+    
+    async function stopJob(bookingId) {
+      const now = new Date();
+      const startTime = new Date(activeTimers[bookingId]);
+      const durationHours = (now - startTime) / (1000 * 60 * 60);
+      
+      // Clear timer
+      delete activeTimers[bookingId];
+      localStorage.setItem('organWorks_activeTimers', JSON.stringify(activeTimers));
+      
+      if (elapsedIntervals[bookingId]) {
+        clearInterval(elapsedIntervals[bookingId]);
+        delete elapsedIntervals[bookingId];
+      }
+      
+      // Update booking in database
+      try {
+        await apiCall('updateBooking', {
+          data: {
+            id: bookingId,
+            actualEndTime: now.toISOString(),
+            actualHours: Math.round(durationHours * 100) / 100,
+            status: 'completed'
+          }
+        });
+        
+        // Update local booking
+        const booking = bookings.find(b => b.id === bookingId);
+        if (booking) {
+          booking.actualStartTime = startTime.toISOString();
+          booking.actualEndTime = now.toISOString();
+          booking.actualHours = Math.round(durationHours * 100) / 100;
+        }
+        
+      } catch (err) {
+        console.error('Failed to update booking:', err);
+        alert('Failed to save. Check connection.');
+      }
+      
+      renderBookings();
+    }
+  </script>
+</body>
+</html>
