@@ -396,7 +396,8 @@
       bookings.forEach(booking => {
         const customer = getCustomerById(booking.customerId);
         const isActive = activeTimers[booking.id];
-        const isCompleted = booking.actualEndTime;
+        // Check for valid date, not just truthy (empty string is falsy but comes from sheet as truthy)
+        const isCompleted = booking.actualEndTime && booking.actualEndTime !== '' && !isNaN(new Date(booking.actualEndTime).getTime());
         
         let cardClass = 'job-card';
         if (booking.type === 'TSC') cardClass += ' solo';
