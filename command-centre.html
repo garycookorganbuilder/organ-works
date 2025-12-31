@@ -149,6 +149,8 @@ const CommandCentre = () => {
   // Invoice calculator
   const [showInvoiceCalc, setShowInvoiceCalc] = useState(null); // booking object or null
   const [selectedBand, setSelectedBand] = useState(null);
+  const [selectedDistance, setSelectedDistance] = useState(null); // distance premium override
+  const [customAmount, setCustomAmount] = useState(''); // custom service charge
   const [pricing, setPricing] = useState({ timeBands: [], distanceBands: [] });
   const [invoiceMaterials, setInvoiceMaterials] = useState([]); // [{description, cost}]
   const [newMaterialDesc, setNewMaterialDesc] = useState('');
@@ -1014,6 +1016,8 @@ const CommandCentre = () => {
                           setMaterialQty(1);
                           setNewMaterialQty(1);
                           setSelectedMaterial(null);
+                          setCustomAmount('');
+                          setSelectedDistance(null);
                           setShowInvoiceCalc({ ...booking, distance, actualHours });
                         }}
                         className="text-sm bg-amber-200 px-4 py-2 rounded-lg hover:bg-amber-300 touch-target"
@@ -1412,17 +1416,20 @@ const CommandCentre = () => {
             {/* Time band selection */}
             <div className="mb-4">
               <div className="text-sm text-gray-600 mb-2">Select time band:</div>
-              <div className="grid grid-cols-5 gap-2">
+              <div className="grid grid-cols-5 gap-2 mb-2">
                 {pricing.timeBands.map(band => {
                   const serviceType = showInvoiceCalc.serviceType || showInvoiceCalc.type || 'TSC';
                   const price = band[serviceType] || band.TSC || 0;
-                  const isSelected = selectedBand === band.hours;
+                  const isSelected = selectedBand === band.hours && !customAmount;
                   const isSuggested = Math.max(4, Math.ceil(showInvoiceCalc.actualHours || 0)) === band.hours;
                   
                   return (
                     <button
                       key={band.hours}
-                      onClick={() => setSelectedBand(band.hours)}
+                      onClick={() => {
+                        setSelectedBand(band.hours);
+                        setCustomAmount('');
+                      }}
                       className={`p-3 rounded-lg text-center border-2 transition-all ${
                         isSelected 
                           ? 'bg-blue-500 text-white border-blue-500' 
@@ -1437,22 +1444,49 @@ const CommandCentre = () => {
                   );
                 })}
               </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-500">Custom:</span>
+                <span className="text-gray-400">£</span>
+                <input
+                  type="number"
+                  placeholder="Enter amount"
+                  value={customAmount}
+                  onChange={(e) => setCustomAmount(e.target.value)}
+                  className={`flex-1 p-2 border-2 rounded text-sm ${customAmount ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}
+                />
+              </div>
             </div>
             
             {/* Distance premium */}
             <div className="bg-gray-100 rounded-lg p-4 mb-4">
-              <div className="flex justify-between">
+              <div className="flex justify-between mb-2">
                 <span className="text-gray-600">Distance</span>
                 <span>{showInvoiceCalc.distance || 0} miles</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">Premium</span>
-                <span className="font-bold">
-                  +£{pricing.distanceBands.find(d => 
-                    (showInvoiceCalc.distance || 0) >= d.minMiles && 
-                    (showInvoiceCalc.distance || 0) <= d.maxMiles
-                  )?.premium || 0}
-                </span>
+              <div className="text-sm text-gray-600 mb-2">Select distance band:</div>
+              <div className="grid grid-cols-4 gap-2">
+                {pricing.distanceBands.map((band, idx) => {
+                  const autoSelected = (showInvoiceCalc.distance || 0) >= band.minMiles && 
+                                       (showInvoiceCalc.distance || 0) <= band.maxMiles;
+                  const isSelected = selectedDistance !== null 
+                    ? selectedDistance === band.premium 
+                    : autoSelected;
+                  
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => setSelectedDistance(band.premium)}
+                      className={`p-2 rounded-lg text-center border-2 transition-all ${
+                        isSelected 
+                          ? 'bg-green-500 text-white border-green-500' 
+                          : 'bg-white border-gray-200 hover:border-green-300'
+                      }`}
+                    >
+                      <div className="text-xs">{band.minMiles}-{band.maxMiles}mi</div>
+                      <div className="font-bold">+£{band.premium}</div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
             
@@ -1592,18 +1626,22 @@ const CommandCentre = () => {
             {(() => {
               const serviceType = showInvoiceCalc.serviceType || showInvoiceCalc.type || 'TSC';
               const band = pricing.timeBands.find(b => b.hours === selectedBand);
-              const serviceCharge = band ? (band[serviceType] || band.TSC || 0) : 0;
-              const distancePremium = pricing.distanceBands.find(d => 
+              const bandPrice = band ? (band[serviceType] || band.TSC || 0) : 0;
+              const serviceCharge = customAmount ? parseFloat(customAmount) : bandPrice;
+              
+              const autoDistancePremium = pricing.distanceBands.find(d => 
                 (showInvoiceCalc.distance || 0) >= d.minMiles && 
                 (showInvoiceCalc.distance || 0) <= d.maxMiles
               )?.premium || 0;
+              const distancePremium = selectedDistance !== null ? selectedDistance : autoDistancePremium;
+              
               const materialsTotal = invoiceMaterials.reduce((sum, m) => sum + (m.cost * (m.quantity || 1)), 0);
               const total = serviceCharge + distancePremium + materialsTotal;
               
               return (
                 <div className="border-t-2 pt-4 mb-4">
                   <div className="flex justify-between text-lg">
-                    <span>Service ({selectedBand}h)</span>
+                    <span>Service {customAmount ? '(custom)' : `(${selectedBand}h)`}</span>
                     <span>£{serviceCharge}</span>
                   </div>
                   <div className="flex justify-between text-lg">
@@ -1613,12 +1651,12 @@ const CommandCentre = () => {
                   {materialsTotal > 0 && (
                     <div className="flex justify-between text-lg">
                       <span>Materials</span>
-                      <span>+£{materialsTotal}</span>
+                      <span>+£{materialsTotal.toFixed(2)}</span>
                     </div>
                   )}
                   <div className="flex justify-between text-2xl font-bold mt-2 pt-2 border-t">
                     <span>Total</span>
-                    <span className="text-green-600">£{total}</span>
+                    <span className="text-green-600">£{total.toFixed(2)}</span>
                   </div>
                 </div>
               );
@@ -1636,11 +1674,15 @@ const CommandCentre = () => {
                 onClick={async () => {
                   const serviceType = showInvoiceCalc.serviceType || showInvoiceCalc.type || 'TSC';
                   const band = pricing.timeBands.find(b => b.hours === selectedBand);
-                  const serviceCharge = band ? (band[serviceType] || band.TSC || 0) : 0;
-                  const distancePremium = pricing.distanceBands.find(d => 
+                  const bandPrice = band ? (band[serviceType] || band.TSC || 0) : 0;
+                  const serviceCharge = customAmount ? parseFloat(customAmount) : bandPrice;
+                  
+                  const autoDistancePremium = pricing.distanceBands.find(d => 
                     (showInvoiceCalc.distance || 0) >= d.minMiles && 
                     (showInvoiceCalc.distance || 0) <= d.maxMiles
                   )?.premium || 0;
+                  const distancePremium = selectedDistance !== null ? selectedDistance : autoDistancePremium;
+                  
                   const materialsTotal = invoiceMaterials.reduce((sum, m) => sum + (m.cost * (m.quantity || 1)), 0);
                   const total = serviceCharge + distancePremium + materialsTotal;
                   
@@ -1675,13 +1717,17 @@ const CommandCentre = () => {
                 ✓ Confirm £{(() => {
                   const serviceType = showInvoiceCalc.serviceType || showInvoiceCalc.type || 'TSC';
                   const band = pricing.timeBands.find(b => b.hours === selectedBand);
-                  const serviceCharge = band ? (band[serviceType] || band.TSC || 0) : 0;
-                  const distancePremium = pricing.distanceBands.find(d => 
+                  const bandPrice = band ? (band[serviceType] || band.TSC || 0) : 0;
+                  const serviceCharge = customAmount ? parseFloat(customAmount) : bandPrice;
+                  
+                  const autoDistancePremium = pricing.distanceBands.find(d => 
                     (showInvoiceCalc.distance || 0) >= d.minMiles && 
                     (showInvoiceCalc.distance || 0) <= d.maxMiles
                   )?.premium || 0;
+                  const distancePremium = selectedDistance !== null ? selectedDistance : autoDistancePremium;
+                  
                   const materialsTotal = invoiceMaterials.reduce((sum, m) => sum + (m.cost * (m.quantity || 1)), 0);
-                  return serviceCharge + distancePremium + materialsTotal;
+                  return (serviceCharge + distancePremium + materialsTotal).toFixed(2);
                 })()}
               </button>
             </div>
