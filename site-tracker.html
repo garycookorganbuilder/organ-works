@@ -272,11 +272,10 @@
     
     .search-row {
       display: flex;
-      gap: 8px;
     }
     
     .material-search {
-      flex: 1;
+      width: 100%;
       padding: 12px;
       border: 2px solid #333;
       border-radius: 8px;
@@ -296,8 +295,21 @@
       text-align: center;
     }
     
+    .qty-add-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    
+    .qty-label {
+      color: #888;
+      font-size: 14px;
+    }
+    
     .add-btn {
-      padding: 12px 16px;
+      flex: 1;
+      padding: 14px 16px;
       background: #3b82f6;
       color: #fff;
       border: none;
@@ -707,10 +719,13 @@
                      oninput="filterMaterials('${booking.id}')"
                      onfocus="showMaterialDropdown('${booking.id}')"
                      autocomplete="off">
-              <input type="number" class="qty-input" id="mat-qty-${booking.id}" value="1" min="1" placeholder="Qty">
-              <button class="add-btn" id="mat-add-btn-${booking.id}" onclick="addSelectedMaterial('${booking.id}')" disabled>Add</button>
             </div>
             <div class="material-dropdown" id="mat-dropdown-${booking.id}"></div>
+            <div class="qty-add-row">
+              <span class="qty-label">Qty:</span>
+              <input type="number" class="qty-input" id="mat-qty-${booking.id}" value="1" min="1">
+              <button class="add-btn" id="mat-add-btn-${booking.id}" onclick="addSelectedMaterial('${booking.id}')" disabled>Add Material</button>
+            </div>
             <input type="hidden" id="mat-selected-name-${booking.id}">
             <input type="hidden" id="mat-selected-price-${booking.id}">
           </div>`;
