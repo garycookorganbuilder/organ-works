@@ -296,6 +296,23 @@
       text-align: center;
     }
     
+    .add-btn {
+      padding: 12px 16px;
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    
+    .add-btn:disabled {
+      background: #333;
+      color: #666;
+      cursor: not-allowed;
+    }
+    
     .material-dropdown {
       display: none;
       position: absolute;
@@ -691,8 +708,11 @@
                      onfocus="showMaterialDropdown('${booking.id}')"
                      autocomplete="off">
               <input type="number" class="qty-input" id="mat-qty-${booking.id}" value="1" min="1" placeholder="Qty">
+              <button class="add-btn" id="mat-add-btn-${booking.id}" onclick="addSelectedMaterial('${booking.id}')" disabled>Add</button>
             </div>
             <div class="material-dropdown" id="mat-dropdown-${booking.id}"></div>
+            <input type="hidden" id="mat-selected-name-${booking.id}">
+            <input type="hidden" id="mat-selected-price-${booking.id}">
           </div>`;
           
           // Manual add (for items not in list)
@@ -881,21 +901,45 @@
     }
     
     async function selectMaterial(bookingId, name, price) {
-      // Get quantity
+      // Store selected item
+      const searchInput = document.getElementById(`mat-search-${bookingId}`);
+      const nameInput = document.getElementById(`mat-selected-name-${bookingId}`);
+      const priceInput = document.getElementById(`mat-selected-price-${bookingId}`);
+      const addBtn = document.getElementById(`mat-add-btn-${bookingId}`);
+      
+      if (searchInput) searchInput.value = name;
+      if (nameInput) nameInput.value = name;
+      if (priceInput) priceInput.value = price;
+      if (addBtn) addBtn.disabled = false;
+      
+      hideMaterialDropdown(bookingId);
+    }
+    
+    async function addSelectedMaterial(bookingId) {
+      const nameInput = document.getElementById(`mat-selected-name-${bookingId}`);
+      const priceInput = document.getElementById(`mat-selected-price-${bookingId}`);
       const qtyInput = document.getElementById(`mat-qty-${bookingId}`);
+      const searchInput = document.getElementById(`mat-search-${bookingId}`);
+      const addBtn = document.getElementById(`mat-add-btn-${bookingId}`);
+      
+      const name = nameInput?.value;
+      const price = parseFloat(priceInput?.value);
       const quantity = parseInt(qtyInput?.value) || 1;
       
-      // Clear search and reset qty
-      const searchInput = document.getElementById(`mat-search-${bookingId}`);
-      if (searchInput) searchInput.value = '';
-      if (qtyInput) qtyInput.value = '1';
-      hideMaterialDropdown(bookingId);
+      if (!name || isNaN(price)) return;
       
-      // Add material with quantity
+      // Add material
       if (!bookingMaterials[bookingId]) {
         bookingMaterials[bookingId] = [];
       }
       bookingMaterials[bookingId].push({ description: name, cost: price, quantity: quantity });
+      
+      // Clear and reset
+      if (searchInput) searchInput.value = '';
+      if (nameInput) nameInput.value = '';
+      if (priceInput) priceInput.value = '';
+      if (qtyInput) qtyInput.value = '1';
+      if (addBtn) addBtn.disabled = true;
       
       // Save to database
       await saveMaterials(bookingId);
