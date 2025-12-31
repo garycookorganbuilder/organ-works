@@ -377,6 +377,11 @@ const CommandCentre = () => {
     try {
       await apiCall('deleteBooking', { bookingId });
       setBookings(bookings.filter(b => b.id !== bookingId));
+      
+      // Refresh tickets in case this booking was linked to one
+      const ticketData = await apiCall('getTickets');
+      setTickets(ticketData || []);
+      
       setLastSaved(new Date());
     } catch (err) {
       alert('Failed to remove booking: ' + err.message);
