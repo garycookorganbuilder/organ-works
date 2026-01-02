@@ -67,6 +67,8 @@ const CommandCentre = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState('');
   
   const [customers, setCustomers] = useState([]);
   const [contacts, setContacts] = useState([]);
@@ -168,6 +170,26 @@ const CommandCentre = () => {
   }, []);
 
   useEffect(() => { if (isConfigured) loadData(); }, [isConfigured, loadData]);
+
+  // Sync contacts to Google
+  const syncContactsToGoogle = async () => {
+    setSyncing(true);
+    setSyncMessage('');
+    try {
+      const result = await apiCall('syncContactsToGoogle');
+      if (result.success) {
+        setSyncMessage(result.message || 'Contacts synced to Google!');
+      } else {
+        setSyncMessage('Error: ' + (result.error || 'Sync failed'));
+      }
+    } catch (err) {
+      setSyncMessage('Error: ' + err.message);
+    } finally {
+      setSyncing(false);
+      // Clear message after 5 seconds
+      setTimeout(() => setSyncMessage(''), 5000);
+    }
+  };
 
   // Helper functions
   const getDateString = (year, month, day) => `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -1069,7 +1091,21 @@ const CommandCentre = () => {
   
   const CustomerListView = () => (
     <div className="bg-white rounded-lg shadow-lg p-4">
-      <h2 className="text-2xl font-bold mb-4">Customers ({customers.length})</h2>
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-2xl font-bold">Customers ({customers.length})</h2>
+        <button 
+          onClick={syncContactsToGoogle} 
+          disabled={syncing}
+          className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 ${syncing ? 'bg-gray-300 cursor-wait' : 'bg-green-500 hover:bg-green-600 text-white'}`}
+        >
+          {syncing ? '⏳ Syncing...' : '📱 Sync to Google'}
+        </button>
+      </div>
+      {syncMessage && (
+        <div className={`mb-4 p-3 rounded-lg ${syncMessage.startsWith('Error') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+          {syncMessage}
+        </div>
+      )}
       <div className="grid gap-2 max-h-[calc(100vh-200px)] overflow-y-auto scroll-panel">
         {customers.sort((a, b) => a.name.localeCompare(b.name)).map(c => (
           <div key={c.id} onClick={() => { setSelectedCustomer(c); setView('customerDetail'); }} className="border-2 rounded-lg p-4 hover:bg-gray-50 cursor-pointer flex justify-between items-center touch-target">
