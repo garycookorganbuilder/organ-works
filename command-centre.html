@@ -100,6 +100,7 @@ const CommandCentre = () => {
     return customers.filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase())).slice(0, 5);
   }, [customers, customerSearch]);
   const [plannerSearch, setPlannerSearch] = useState('');
+  const [customerListSearch, setCustomerListSearch] = useState('');
   const [showProjectSummary, setShowProjectSummary] = useState(null);
   const [showCapacityDetails, setShowCapacityDetails] = useState(false);
   
@@ -227,7 +228,13 @@ const CommandCentre = () => {
   const isCustomerBookedInMonth = (customerId, monthIndex, year) => {
     const monthStart = getDateString(year, monthIndex, 1);
     const monthEnd = getDateString(year, monthIndex, new Date(year, monthIndex + 1, 0).getDate());
-    return bookings.some(b => b.customerId === customerId && b.date >= monthStart && b.date <= monthEnd);
+    // Only count tuning-type bookings (OTS, TSC, WS), not faults or projects
+    return bookings.some(b => 
+      b.customerId === customerId && 
+      b.date >= monthStart && 
+      b.date <= monthEnd &&
+      (b.type === 'OTS' || b.type === 'TSC' || b.type === 'WS' || b.type === 'tuning_full' || b.type === 'tuning_half')
+    );
   };
 
   const getCustomerHistory = (customerId) => bookings.filter(b => b.customerId === customerId).sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -771,7 +778,15 @@ const CommandCentre = () => {
   const updateCustomer = async (customer) => {
     setSaving(true);
     try {
-      await apiCall('updateCustomer', { data: { ...customer, tuningMonths: customer.tuningMonths } });
+      await apiCall('updateCustomer', { data: JSON.stringify({ 
+        id: customer.id,
+        name: customer.name,
+        notes: customer.notes,
+        customRate: customer.customRate,
+        tuningMonths: customer.tuningMonths || [],
+        tuningNotes: customer.tuningNotes,
+        distance: customer.distance
+      }) });
       setCustomers(customers.map(c => c.id === customer.id ? customer : c));
       setLastSaved(new Date());
     } catch (err) {
@@ -1355,6 +1370,11 @@ const CommandCentre = () => {
   // CUSTOMER VIEWS
   // ============================================================
   
+  const filteredCustomerList = useMemo(() => {
+    if (!customerListSearch) return customers;
+    return customers.filter(c => c.name.toLowerCase().includes(customerListSearch.toLowerCase()));
+  }, [customers, customerListSearch]);
+
   const CustomerListView = () => (
     <div className="bg-white rounded-lg shadow-lg p-4">
       <div className="flex justify-between items-center mb-4">
@@ -1372,8 +1392,17 @@ const CommandCentre = () => {
           {syncMessage}
         </div>
       )}
-      <div className="grid gap-2 max-h-[calc(100vh-200px)] overflow-y-auto scroll-panel">
-        {customers.sort((a, b) => a.name.localeCompare(b.name)).map(c => (
+      <div className="mb-4">
+        <input 
+          type="text" 
+          placeholder="🔍 Search customers..." 
+          value={customerListSearch} 
+          onChange={(e) => setCustomerListSearch(e.target.value)}
+          className="w-full p-3 border-2 rounded-lg text-lg"
+        />
+      </div>
+      <div className="grid gap-2 max-h-[calc(100vh-280px)] overflow-y-auto scroll-panel">
+        {filteredCustomerList.sort((a, b) => a.name.localeCompare(b.name)).map(c => (
           <div key={c.id} onClick={() => { setSelectedCustomer(c); setView('customerDetail'); }} className="border-2 rounded-lg p-4 hover:bg-gray-50 cursor-pointer flex justify-between items-center touch-target">
             <div>
               <div className="font-bold text-xl">{c.name}</div>
@@ -2099,6 +2128,49 @@ const CommandCentre = () => {
                   <label className="text-sm text-gray-600">Job notes (optional):</label>
                   <input type="text" value={jobNotes} onChange={(e) => setJobNotes(e.target.value)} className="w-full p-3 border rounded-lg text-sm" placeholder="e.g. Fix cipher, service swell" />
                 </div>
+                
+                {/* Show which month they're due for (from Tunings Due) */}
+                {(() => {
+                  const dueItem = jobsDue.find(j => j.customer.id === selectedCustomerToBook?.id);
+                  if (dueItem && !selectedTicketToBook) {
+                    // Find next available workday in the due month
+                    const getNextWorkday = () => {
+                      const daysInMonth = new Date(dueItem.year, dueItem.month + 1, 0).getDate();
+                      for (let d = 1; d <= daysInMonth; d++) {
+                        const date = new Date(dueItem.year, dueItem.month, d);
+                        const dateStr = getDateString(dueItem.year, dueItem.month, d);
+                        const dow = date.getDay();
+                        // Mon-Fri, not a day off, not already booked
+                        if (dow >= 1 && dow <= 5 && !isDayOff(dateStr) && !bookings.some(b => b.date === dateStr)) {
+                          return { date, dateStr, dayName: ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow] };
+                        }
+                      }
+                      return null;
+                    };
+                    const nextDay = getNextWorkday();
+                    
+                    return (
+                      <div className={`mt-3 p-3 rounded-lg ${dueItem.urgent ? 'bg-amber-100 border-2 border-amber-400' : 'bg-blue-50 border border-blue-200'}`}>
+                        <div className="text-sm font-medium mb-2">
+                          {dueItem.urgent ? '⚠️' : '📅'} Due: <strong>{dueItem.monthName} {dueItem.year}</strong>
+                          {dueItem.urgent && <span className="text-amber-700 ml-2">(overdue!)</span>}
+                        </div>
+                        {nextDay && (
+                          <button
+                            onClick={() => {
+                              const price = customQuote ? parseFloat(customQuote) : 0;
+                              addBooking(nextDay.dateStr, selectedCustomerToBook.id, bookingType, price, jobNotes);
+                            }}
+                            className="w-full py-2 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600"
+                          >
+                            ⚡ Quick Book: {nextDay.dayName} {nextDay.date.getDate()} {dueItem.monthName.slice(0,3)}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
                 
                 <div className={`text-lg mt-4 font-bold text-center p-3 rounded-lg ${selectedTicketToBook ? 'text-orange-700 bg-orange-200' : 'text-green-700 bg-green-200'}`}>👆 Now tap a day on the calendar</div>
                 <button onClick={() => { setSelectedCustomerToBook(null); setSelectedTicketToBook(null); setCustomQuote(''); setJobNotes(''); }} className="w-full mt-3 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target">Cancel</button>
