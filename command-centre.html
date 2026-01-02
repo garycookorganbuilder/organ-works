@@ -1370,12 +1370,12 @@ const CommandCentre = () => {
   // CUSTOMER VIEWS
   // ============================================================
   
-  const filteredCustomerList = useMemo(() => {
-    if (!customerListSearch) return customers;
-    return customers.filter(c => c.name.toLowerCase().includes(customerListSearch.toLowerCase()));
-  }, [customers, customerListSearch]);
-
-  const CustomerListView = () => (
+  const CustomerListView = () => {
+    const filteredList = customerListSearch 
+      ? customers.filter(c => c.name.toLowerCase().includes(customerListSearch.toLowerCase()))
+      : customers;
+    
+    return (
     <div className="bg-white rounded-lg shadow-lg p-4">
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-2xl font-bold">Customers ({customers.length})</h2>
@@ -1402,7 +1402,7 @@ const CommandCentre = () => {
         />
       </div>
       <div className="grid gap-2 max-h-[calc(100vh-280px)] overflow-y-auto scroll-panel">
-        {filteredCustomerList.sort((a, b) => a.name.localeCompare(b.name)).map(c => (
+        {filteredList.sort((a, b) => a.name.localeCompare(b.name)).map(c => (
           <div key={c.id} onClick={() => { setSelectedCustomer(c); setView('customerDetail'); }} className="border-2 rounded-lg p-4 hover:bg-gray-50 cursor-pointer flex justify-between items-center touch-target">
             <div>
               <div className="font-bold text-xl">{c.name}</div>
@@ -1418,7 +1418,8 @@ const CommandCentre = () => {
         ))}
       </div>
     </div>
-  );
+    );
+  };
 
   // ============================================================
   // REPORTS VIEW - Comprehensive Dashboard
