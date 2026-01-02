@@ -92,6 +92,10 @@ const CommandCentre = () => {
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [editingContact, setEditingContact] = useState(null);
   const [showAddContact, setShowAddContact] = useState(false);
+  const [showAddCustomer, setShowAddCustomer] = useState(false);
+  const [newCustomerName, setNewCustomerName] = useState('');
+  const [newCustomerAddress, setNewCustomerAddress] = useState('');
+  const [newCustomerRate, setNewCustomerRate] = useState('');
   const [newContactName, setNewContactName] = useState('');
   const [newContactRole, setNewContactRole] = useState('');
   const [newContactPhone, setNewContactPhone] = useState('');
@@ -219,7 +223,8 @@ const CommandCentre = () => {
   const getBookingsForDay = (date) => bookings.filter(b => b.date === date);
   const getCustomerById = (id) => customers.find(c => c.id === id);
   const getBookingContact = (customerId) => contacts.find(c => c.customerId === customerId && c.isBookingContact) || contacts.find(c => c.customerId === customerId);
-  const isDayOff = (date) => daysOff.includes(date);
+  const isDayOff = (date) => daysOff.some(d => d.date === date || d === date);
+  const getDayOffReason = (date) => { const dayOff = daysOff.find(d => d.date === date); return dayOff?.reason || ''; };
   const formatDate = (dateStr) => { 
     if (!dateStr) return ''; 
     const [year, month, day] = dateStr.split('-').map(Number);
@@ -318,7 +323,7 @@ const CommandCentre = () => {
     const totalWorkdays = allWorkdays.length;
     
     // Days off this year
-    const daysOffThisYear = daysOff.filter(d => d && parseInt(d.split('-')[0]) === currentYear);
+    const daysOffThisYear = daysOff.filter(d => d && d.date && parseInt(d.date.split('-')[0]) === currentYear);
     
     // Available workdays (minus days off)
     const availableWorkdays = allWorkdays.filter(d => !daysOffThisYear.includes(d));
@@ -642,19 +647,32 @@ const CommandCentre = () => {
     }
   };
 
-  const toggleDayOff = async (date) => {
+  const toggleDayOff = async (date, reason = '') => {
     setSaving(true);
     try {
       if (isDayOff(date)) {
         await apiCall('removeDayOff', { date });
-        setDaysOff(daysOff.filter(d => d !== date));
+        setDaysOff(daysOff.filter(d => d.date !== date && d !== date));
       } else {
-        await apiCall('addDayOff', { data: { date, reason: '' } });
-        setDaysOff([...daysOff, date]);
+        await apiCall('addDayOff', { data: { date, reason } });
+        setDaysOff([...daysOff, { date, reason }]);
       }
       setLastSaved(new Date());
     } catch (err) {
       alert('Failed to update day off: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const updateDayOffReason = async (date, reason) => {
+    setSaving(true);
+    try {
+      await apiCall('updateDayOff', { data: { date, reason } });
+      setDaysOff(daysOff.map(d => d.date === date ? { ...d, reason } : d));
+      setLastSaved(new Date());
+    } catch (err) {
+      alert('Failed to update reason: ' + err.message);
     } finally {
       setSaving(false);
     }
@@ -1000,10 +1018,22 @@ const CommandCentre = () => {
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-3xl p-2 touch-target">✕</button>
         </div>
 
-        <label className="flex items-center gap-3 mb-4 p-4 bg-yellow-50 rounded-lg cursor-pointer touch-target flex-shrink-0">
+        <label className="flex items-center gap-3 mb-2 p-4 bg-yellow-50 rounded-lg cursor-pointer touch-target flex-shrink-0">
           <input type="checkbox" checked={isOff} onChange={() => toggleDayOff(date)} className="w-6 h-6" />
           <span className="text-lg font-medium">Day off / Holiday</span>
         </label>
+        
+        {isOff && (
+          <div className="mb-4 p-3 bg-yellow-100 rounded-lg flex-shrink-0">
+            <input
+              type="text"
+              placeholder="Reason (e.g. Bank Holiday, Annual Leave)"
+              defaultValue={getDayOffReason(date)}
+              onBlur={(e) => updateDayOffReason(date, e.target.value)}
+              className="w-full p-3 border-2 rounded-lg text-lg"
+            />
+          </div>
+        )}
 
         {!isOff && (
           <div className="space-y-3 mb-4 flex-1 overflow-y-auto min-h-0">
@@ -1634,7 +1664,7 @@ const CommandCentre = () => {
       });
       
       const totalWorkdays = workdaysInYear.reduce((a, b) => a + b, 0);
-      const daysOffCount = daysOff.filter(d => parseInt(d.split('-')[0]) === selectedYear).length;
+      const daysOffCount = daysOff.filter(d => d && d.date && parseInt(d.date.split('-')[0]) === selectedYear).length;
       const availableDays = totalWorkdays - daysOffCount;
       
       const bookedDays = new Set(bookings.filter(b => parseInt(b.date.split('-')[0]) === selectedYear).map(b => b.date)).size;
@@ -2049,6 +2079,43 @@ const CommandCentre = () => {
     const updated = { ...editingCustomer, tuningMonths: newMonths };
     setEditingCustomer(updated);
     await updateCustomer(updated);
+  };
+
+  // Customer management
+  const addCustomer = async () => {
+    if (!newCustomerName) return;
+    setSaving(true);
+    try {
+      const result = await apiCall('addCustomer', { 
+        data: JSON.stringify({
+          name: newCustomerName,
+          notes: newCustomerAddress,
+          customRate: newCustomerRate ? parseFloat(newCustomerRate) : null,
+          tuningMonths: []
+        })
+      });
+      const newCust = { 
+        id: result.id, 
+        name: newCustomerName, 
+        notes: newCustomerAddress,
+        customRate: newCustomerRate ? parseFloat(newCustomerRate) : null,
+        tuningMonths: []
+      };
+      setCustomers([...customers, newCust]);
+      setShowAddCustomer(false);
+      setNewCustomerName('');
+      setNewCustomerAddress('');
+      setNewCustomerRate('');
+      // Open the new customer detail
+      setSelectedCustomer(newCust);
+      setEditingCustomer({...newCust});
+      setTuningGroupSearch('');
+      setView('customerDetail');
+    } catch (err) {
+      alert('Failed to add customer: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
   };
 
   // Contact management
@@ -2488,14 +2555,38 @@ const CommandCentre = () => {
         <div className="bg-white rounded-lg shadow-lg p-4">
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-2xl font-bold">Customers ({customers.length})</h2>
-            <button 
-              onClick={syncContactsToGoogle} 
-              disabled={syncing}
-              className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 ${syncing ? 'bg-gray-300 cursor-wait' : 'bg-green-500 hover:bg-green-600 text-white'}`}
-            >
-              {syncing ? '⏳ Syncing...' : '📱 Sync to Google'}
-            </button>
+            <div className="flex gap-2">
+              <button 
+                onClick={() => setShowAddCustomer(true)}
+                className="px-4 py-2 rounded-lg font-medium bg-blue-500 hover:bg-blue-600 text-white"
+              >
+                + New Customer
+              </button>
+              <button 
+                onClick={syncContactsToGoogle} 
+                disabled={syncing}
+                className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 ${syncing ? 'bg-gray-300 cursor-wait' : 'bg-green-500 hover:bg-green-600 text-white'}`}
+              >
+                {syncing ? '⏳ Syncing...' : '📱 Sync to Google'}
+              </button>
+            </div>
           </div>
+          
+          {showAddCustomer && (
+            <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4 mb-4">
+              <h3 className="font-bold text-lg mb-3">New Customer</h3>
+              <div className="grid gap-3">
+                <input type="text" placeholder="Customer / Church Name *" value={newCustomerName} onChange={(e) => setNewCustomerName(e.target.value)} className="p-3 border-2 rounded-lg text-lg" />
+                <input type="text" placeholder="Notes / Address" value={newCustomerAddress} onChange={(e) => setNewCustomerAddress(e.target.value)} className="p-3 border-2 rounded-lg" />
+                <input type="number" placeholder="Custom Rate (leave blank for default £550)" value={newCustomerRate} onChange={(e) => setNewCustomerRate(e.target.value)} className="p-3 border-2 rounded-lg" />
+              </div>
+              <div className="flex gap-2 mt-3">
+                <button onClick={addCustomer} disabled={!newCustomerName} className="bg-green-500 text-white px-6 py-2 rounded-lg disabled:bg-gray-300 font-medium">Save & Edit</button>
+                <button onClick={() => { setShowAddCustomer(false); setNewCustomerName(''); setNewCustomerAddress(''); setNewCustomerRate(''); }} className="bg-gray-300 px-6 py-2 rounded-lg">Cancel</button>
+              </div>
+            </div>
+          )}
+          
           {syncMessage && (
             <div className={`mb-4 p-3 rounded-lg ${syncMessage.startsWith('Error') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
               {syncMessage}
