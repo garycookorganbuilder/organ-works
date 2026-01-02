@@ -169,7 +169,6 @@ const CommandCentre = () => {
       setContacts(parsedContacts);
       setProjects(data.projects || []);
       const normalizedBookings = (data.bookings || []).map(b => ({ ...b, date: b.date ? b.date.split('T')[0] : b.date }));
-      console.log('BOOKINGS DEBUG:', normalizedBookings.filter(b => b.type === 'project').map(b => ({ date: b.date, name: b.projectName })));
       setBookings(normalizedBookings);
       setDaysOff(data.daysOff || []);
       setTickets(data.tickets || []);
