@@ -690,8 +690,16 @@ const CommandCentre = () => {
   };
 
   const handleDayClick = (dateStr, year, month, day) => {
-    if (!isWorkDay(year, month, day)) return;
-    if (isDayOff(dateStr)) return;
+    if (!isWorkDay(year, month, day)) return; // Weekends - never clickable
+    
+    // If it's a day off and we're not trying to book something, allow toggling it
+    if (isDayOff(dateStr)) {
+      if (!selectedCustomerToBook && !allocatingProject) {
+        setSelectedDay(dateStr); // Open day panel to toggle day off
+      }
+      return; // Don't allow booking on days off
+    }
+    
     if (allocatingProject) { toggleProjectDay(dateStr); return; }
     if (selectedCustomerToBook) { 
       // Use 'fault' type if booking from a ticket, otherwise use selected bookingType
