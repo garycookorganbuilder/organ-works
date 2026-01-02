@@ -1089,6 +1089,580 @@ const CommandCentre = () => {
     </div>
   );
 
+  // ============================================================
+  // REPORTS VIEW - Comprehensive Dashboard
+  // ============================================================
+  
+  const ReportsView = () => {
+    const [reportType, setReportType] = useState('summary');
+    const [selectedYear, setSelectedYear] = useState(currentYear);
+    
+    // ========== DATA CALCULATIONS ==========
+    
+    // Monthly income data
+    const getMonthlyIncome = () => {
+      const months = Array(12).fill(0).map((_, i) => ({ month: i, income: 0, count: 0, tunings: 0, faults: 0, projects: 0 }));
+      bookings.filter(b => {
+        const d = new Date(b.date);
+        return d.getFullYear() === selectedYear && (b.status === 'completed' || b.status === 'invoiced' || b.status === 'paid');
+      }).forEach(b => {
+        const m = new Date(b.date).getMonth();
+        months[m].income += parseFloat(b.price) || 0;
+        months[m].count++;
+        if (b.type === 'OTS' || b.type === 'TSC' || b.type === 'WS') months[m].tunings++;
+        else if (b.type === 'fault') months[m].faults++;
+        else if (b.type === 'project') months[m].projects++;
+      });
+      return months;
+    };
+    
+    // Outstanding invoices
+    const getOutstanding = () => {
+      return bookings.filter(b => b.status === 'invoiced').map(b => ({
+        ...b,
+        customer: getCustomerById(b.customerId),
+        daysSince: Math.floor((new Date() - new Date(b.invoiceDate || b.date)) / (1000 * 60 * 60 * 24))
+      })).sort((a, b) => b.daysSince - a.daysSince);
+    };
+    
+    // Awaiting invoice
+    const getAwaitingInvoice = () => {
+      return bookings.filter(b => b.status === 'completed').map(b => ({
+        ...b,
+        customer: getCustomerById(b.customerId),
+        daysSince: Math.floor((new Date() - new Date(b.date)) / (1000 * 60 * 60 * 24))
+      })).sort((a, b) => b.daysSince - a.daysSince);
+    };
+    
+    // Customer revenue ranking
+    const getCustomerRevenue = () => {
+      const revenue = {};
+      bookings.filter(b => {
+        const d = new Date(b.date);
+        return d.getFullYear() === selectedYear && (b.status === 'paid' || b.status === 'invoiced' || b.status === 'completed');
+      }).forEach(b => {
+        if (!revenue[b.customerId]) revenue[b.customerId] = { paid: 0, invoiced: 0, completed: 0, count: 0 };
+        revenue[b.customerId].count++;
+        if (b.status === 'paid') revenue[b.customerId].paid += parseFloat(b.price) || 0;
+        else if (b.status === 'invoiced') revenue[b.customerId].invoiced += parseFloat(b.price) || 0;
+        else if (b.status === 'completed') revenue[b.customerId].completed += parseFloat(b.price) || 0;
+      });
+      return Object.entries(revenue)
+        .map(([id, data]) => ({ customer: getCustomerById(id), ...data, total: data.paid + data.invoiced + data.completed }))
+        .filter(r => r.customer)
+        .sort((a, b) => b.total - a.total);
+    };
+    
+    // Project profitability
+    const getProjectProfitability = () => {
+      return activeProjects.map(p => {
+        const hourlyRate = 45;
+        const labourCost = p.totalHours * hourlyRate;
+        const totalCost = labourCost + p.materialsCost;
+        const quotedTotal = parseFloat(p.quotedTotal) || 0;
+        const profit = quotedTotal - totalCost;
+        return { ...p, labourCost, totalCost, profit, profitMargin: quotedTotal > 0 ? (profit / quotedTotal * 100) : 0 };
+      });
+    };
+    
+    // Year summary
+    const getYearSummary = () => {
+      const yearBookings = bookings.filter(b => new Date(b.date).getFullYear() === selectedYear);
+      const paid = yearBookings.filter(b => b.status === 'paid');
+      const invoiced = yearBookings.filter(b => b.status === 'invoiced');
+      const completed = yearBookings.filter(b => b.status === 'completed');
+      const tunings = yearBookings.filter(b => b.type === 'OTS' || b.type === 'TSC' || b.type === 'WS');
+      const faults = yearBookings.filter(b => b.type === 'fault');
+      const projectDays = yearBookings.filter(b => b.type === 'project');
+      
+      return {
+        totalJobs: yearBookings.length,
+        paidJobs: paid.length,
+        paidTotal: paid.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0),
+        invoicedJobs: invoiced.length,
+        invoicedTotal: invoiced.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0),
+        completedJobs: completed.length,
+        completedTotal: completed.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0),
+        tuningCount: tunings.length,
+        faultCount: faults.length,
+        projectDayCount: projectDays.length
+      };
+    };
+    
+    // Tunings overdue (months passed without tuning)
+    const getTuningsOverdue = () => {
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      const overdue = [];
+      
+      customers.forEach(c => {
+        if (!c.tuningMonths || c.tuningMonths.length === 0) return;
+        
+        // Check each tuning month
+        c.tuningMonths.forEach(month => {
+          // If this month has passed this year
+          if (month < currentMonth) {
+            // Check if there's a tuning booked/done for this month this year
+            const hasTuning = bookings.some(b => {
+              const d = new Date(b.date);
+              return b.customerId === c.id && 
+                     d.getFullYear() === currentYear && 
+                     d.getMonth() === month &&
+                     (b.type === 'OTS' || b.type === 'TSC' || b.type === 'WS');
+            });
+            
+            if (!hasTuning) {
+              overdue.push({ customer: c, dueMonth: month, monthName: monthNames[month] });
+            }
+          }
+        });
+      });
+      
+      return overdue.sort((a, b) => a.dueMonth - b.dueMonth);
+    };
+    
+    // Tunings due next month
+    const getTuningsDueNextMonth = () => {
+      const nextMonth = (new Date().getMonth() + 1) % 12;
+      return customers.filter(c => (c.tuningMonths || []).includes(nextMonth))
+        .filter(c => {
+          // Check if already booked for next month
+          return !bookings.some(b => {
+            const d = new Date(b.date);
+            return b.customerId === c.id && 
+                   d.getMonth() === nextMonth &&
+                   d.getFullYear() === (nextMonth === 0 ? currentYear + 1 : currentYear) &&
+                   (b.type === 'OTS' || b.type === 'TSC' || b.type === 'WS');
+          });
+        });
+    };
+    
+    // Hours by customer (from time entries)
+    const getHoursByCustomer = () => {
+      const hours = {};
+      // Would need timeEntries data - for now use booking estimates
+      bookings.filter(b => new Date(b.date).getFullYear() === selectedYear).forEach(b => {
+        if (!hours[b.customerId]) hours[b.customerId] = 0;
+        // Estimate hours based on service type
+        if (b.type === 'OTS') hours[b.customerId] += 6;
+        else if (b.type === 'TSC') hours[b.customerId] += 5;
+        else if (b.type === 'WS') hours[b.customerId] += 4;
+        else if (b.type === 'fault') hours[b.customerId] += 3;
+        else if (b.type === 'project') hours[b.customerId] += 7;
+      });
+      return Object.entries(hours)
+        .map(([id, hrs]) => ({ customer: getCustomerById(id), hours: hrs }))
+        .filter(r => r.customer)
+        .sort((a, b) => b.hours - a.hours);
+    };
+    
+    // Utilisation rate
+    const getUtilisation = () => {
+      const workdaysInYear = Array(12).fill(0).map((_, month) => {
+        let count = 0;
+        const daysInMonth = new Date(selectedYear, month + 1, 0).getDate();
+        for (let d = 1; d <= daysInMonth; d++) {
+          const dow = new Date(selectedYear, month, d).getDay();
+          if (dow >= 1 && dow <= 5) count++;
+        }
+        return count;
+      });
+      
+      const totalWorkdays = workdaysInYear.reduce((a, b) => a + b, 0);
+      const daysOffCount = daysOff.filter(d => new Date(d).getFullYear() === selectedYear).length;
+      const availableDays = totalWorkdays - daysOffCount;
+      
+      const bookedDays = new Set(bookings.filter(b => new Date(b.date).getFullYear() === selectedYear).map(b => b.date)).size;
+      
+      return {
+        totalWorkdays,
+        daysOffCount,
+        availableDays,
+        bookedDays,
+        utilisation: availableDays > 0 ? Math.round((bookedDays / availableDays) * 100) : 0
+      };
+    };
+    
+    // Customers with no tuning schedule
+    const getNoScheduleCustomers = () => {
+      return customers.filter(c => !c.tuningMonths || c.tuningMonths.length === 0);
+    };
+    
+    // ========== COMPUTED DATA ==========
+    const monthlyData = getMonthlyIncome();
+    const outstanding = getOutstanding();
+    const awaitingInvoice = getAwaitingInvoice();
+    const customerRevenue = getCustomerRevenue();
+    const projectProfit = getProjectProfitability();
+    const yearSummary = getYearSummary();
+    const tuningsOverdue = getTuningsOverdue();
+    const tuningsNextMonth = getTuningsDueNextMonth();
+    const hoursByCustomer = getHoursByCustomer();
+    const utilisation = getUtilisation();
+    const noScheduleCustomers = getNoScheduleCustomers();
+    const maxMonthlyIncome = Math.max(...monthlyData.map(m => m.income), 1);
+    
+    const reportTabs = [
+      { id: 'summary', label: '📋 Summary', count: null },
+      { id: 'monthly', label: '📈 Monthly', count: null },
+      { id: 'outstanding', label: '⏳ Outstanding', count: outstanding.length },
+      { id: 'awaiting', label: '📝 To Invoice', count: awaitingInvoice.length },
+      { id: 'overdue', label: '⚠️ Overdue', count: tuningsOverdue.length },
+      { id: 'upcoming', label: '📅 Upcoming', count: tuningsNextMonth.length },
+      { id: 'customers', label: '👥 Customers', count: null },
+      { id: 'hours', label: '⏱️ Hours', count: null },
+      { id: 'utilisation', label: '📊 Utilisation', count: null },
+      { id: 'projects', label: '🔧 Projects', count: activeProjects.length },
+      { id: 'noschedule', label: '❓ No Schedule', count: noScheduleCustomers.length }
+    ];
+    
+    return (
+      <div className="bg-white rounded-lg shadow-lg p-6 max-h-[calc(100vh-140px)] overflow-hidden flex flex-col">
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-2xl font-bold">📊 Reports Dashboard</h2>
+          <select value={selectedYear} onChange={(e) => setSelectedYear(parseInt(e.target.value))} className="px-4 py-2 border-2 rounded-lg bg-white text-lg">
+            {[currentYear - 1, currentYear, currentYear + 1].map(y => (
+              <option key={y} value={y}>{y}</option>
+            ))}
+          </select>
+        </div>
+        
+        {/* Report Type Tabs */}
+        <div className="flex gap-2 mb-4 flex-wrap">
+          {reportTabs.map(tab => (
+            <button 
+              key={tab.id} 
+              onClick={() => setReportType(tab.id)} 
+              className={`px-3 py-2 rounded-lg font-medium text-sm ${reportType === tab.id ? 'bg-blue-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
+            >
+              {tab.label} {tab.count !== null && tab.count > 0 && <span className="ml-1 bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full">{tab.count}</span>}
+            </button>
+          ))}
+        </div>
+        
+        <div className="flex-1 overflow-y-auto">
+          {/* ========== YEAR SUMMARY ========== */}
+          {reportType === 'summary' && (
+            <div>
+              <h3 className="text-xl font-bold mb-4">Year Summary {selectedYear}</h3>
+              <div className="grid grid-cols-3 gap-4 mb-6">
+                <div className="bg-green-100 rounded-lg p-6 text-center">
+                  <div className="text-4xl font-bold text-green-700">{formatCurrency(yearSummary.paidTotal)}</div>
+                  <div className="text-green-600 mt-2">💰 Paid ({yearSummary.paidJobs})</div>
+                </div>
+                <div className="bg-blue-100 rounded-lg p-6 text-center">
+                  <div className="text-4xl font-bold text-blue-700">{formatCurrency(yearSummary.invoicedTotal)}</div>
+                  <div className="text-blue-600 mt-2">📧 Invoiced ({yearSummary.invoicedJobs})</div>
+                </div>
+                <div className="bg-amber-100 rounded-lg p-6 text-center">
+                  <div className="text-4xl font-bold text-amber-700">{formatCurrency(yearSummary.completedTotal)}</div>
+                  <div className="text-amber-600 mt-2">✓ Done ({yearSummary.completedJobs})</div>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-4 gap-4 mb-6">
+                <div className="bg-gray-100 rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold">{yearSummary.tuningCount}</div>
+                  <div className="text-sm text-gray-600">Tunings</div>
+                </div>
+                <div className="bg-gray-100 rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold">{yearSummary.faultCount}</div>
+                  <div className="text-sm text-gray-600">Faults</div>
+                </div>
+                <div className="bg-gray-100 rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold">{yearSummary.projectDayCount}</div>
+                  <div className="text-sm text-gray-600">Project Days</div>
+                </div>
+                <div className="bg-gray-100 rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold">{utilisation.utilisation}%</div>
+                  <div className="text-sm text-gray-600">Utilisation</div>
+                </div>
+              </div>
+              
+              <div className="p-4 bg-gray-800 text-white rounded-lg">
+                <div className="text-3xl font-bold">{formatCurrency(yearSummary.paidTotal + yearSummary.invoicedTotal + yearSummary.completedTotal)}</div>
+                <div className="text-gray-300">Total Pipeline for {selectedYear}</div>
+              </div>
+            </div>
+          )}
+          
+          {/* ========== MONTHLY INCOME ========== */}
+          {reportType === 'monthly' && (
+            <div>
+              <h3 className="text-xl font-bold mb-4">Monthly Income {selectedYear}</h3>
+              <div className="space-y-2">
+                {monthlyData.map((m, i) => (
+                  <div key={i} className="flex items-center gap-4">
+                    <div className="w-12 text-sm font-medium">{monthNames[i].slice(0, 3)}</div>
+                    <div className="flex-1 bg-gray-100 rounded-full h-10 overflow-hidden">
+                      <div 
+                        className="bg-green-500 h-full rounded-full flex items-center justify-end pr-3"
+                        style={{ width: `${Math.max((m.income / maxMonthlyIncome) * 100, m.income > 0 ? 15 : 0)}%` }}
+                      >
+                        {m.income > 0 && <span className="text-white text-sm font-bold">{formatCurrency(m.income)}</span>}
+                      </div>
+                    </div>
+                    <div className="w-32 text-right text-sm">
+                      <span className="text-blue-600">{m.tunings}T</span> / <span className="text-orange-600">{m.faults}F</span> / <span className="text-purple-600">{m.projects}P</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-6 p-4 bg-green-100 rounded-lg flex justify-between items-center">
+                <div>
+                  <div className="text-3xl font-bold text-green-700">{formatCurrency(monthlyData.reduce((sum, m) => sum + m.income, 0))}</div>
+                  <div className="text-green-600">Total for {selectedYear}</div>
+                </div>
+                <div className="text-right text-sm">
+                  <div className="text-blue-600">{monthlyData.reduce((sum, m) => sum + m.tunings, 0)} Tunings</div>
+                  <div className="text-orange-600">{monthlyData.reduce((sum, m) => sum + m.faults, 0)} Faults</div>
+                  <div className="text-purple-600">{monthlyData.reduce((sum, m) => sum + m.projects, 0)} Project Days</div>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* ========== OUTSTANDING INVOICES ========== */}
+          {reportType === 'outstanding' && (
+            <div>
+              <h3 className="text-xl font-bold mb-4">Outstanding Invoices ({outstanding.length})</h3>
+              {outstanding.length === 0 ? (
+                <div className="text-center py-12 text-gray-500"><div className="text-5xl mb-4">🎉</div>No outstanding invoices!</div>
+              ) : (
+                <div className="space-y-2">
+                  {outstanding.map(b => (
+                    <div key={b.id} className={`flex justify-between items-center p-4 rounded-lg border-l-4 ${b.daysSince > 30 ? 'bg-red-50 border-red-500' : b.daysSince > 14 ? 'bg-amber-50 border-amber-500' : 'bg-blue-50 border-blue-500'}`}>
+                      <div>
+                        <div className="font-bold">{b.customer?.name || 'Unknown'}</div>
+                        <div className="text-sm text-gray-500">{new Date(b.date).toLocaleDateString('en-GB')} • {b.daysSince} days ago</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold text-lg">{formatCurrency(b.price)}</div>
+                        <button onClick={() => updateBookingStatus(b.id, 'paid')} className="text-sm bg-green-500 text-white px-3 py-1 rounded mt-1">💰 Paid</button>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="mt-4 p-4 bg-blue-100 rounded-lg">
+                    <div className="text-2xl font-bold text-blue-700">Total: {formatCurrency(outstanding.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0))}</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* ========== AWAITING INVOICE ========== */}
+          {reportType === 'awaiting' && (
+            <div>
+              <h3 className="text-xl font-bold mb-4">Needs Invoicing ({awaitingInvoice.length})</h3>
+              {awaitingInvoice.length === 0 ? (
+                <div className="text-center py-12 text-gray-500"><div className="text-5xl mb-4">✨</div>All caught up!</div>
+              ) : (
+                <div className="space-y-2">
+                  {awaitingInvoice.map(b => (
+                    <div key={b.id} className={`flex justify-between items-center p-4 rounded-lg border-l-4 ${b.daysSince > 14 ? 'bg-red-50 border-red-500' : b.daysSince > 7 ? 'bg-amber-50 border-amber-500' : 'bg-gray-50 border-gray-300'}`}>
+                      <div>
+                        <div className="font-bold">{b.customer?.name || 'Unknown'}</div>
+                        <div className="text-sm text-gray-500">{new Date(b.date).toLocaleDateString('en-GB')} • {getJobTypeLabel(b.type)} • {b.daysSince} days ago</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold text-lg">{formatCurrency(b.price)}</div>
+                        <button onClick={() => updateBookingStatus(b.id, 'invoiced')} className="text-sm bg-amber-500 text-white px-3 py-1 rounded mt-1">📧 Invoice</button>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="mt-4 p-4 bg-amber-100 rounded-lg">
+                    <div className="text-2xl font-bold text-amber-700">Total: {formatCurrency(awaitingInvoice.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0))}</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* ========== TUNINGS OVERDUE ========== */}
+          {reportType === 'overdue' && (
+            <div>
+              <h3 className="text-xl font-bold mb-4">Overdue Tunings ({tuningsOverdue.length})</h3>
+              {tuningsOverdue.length === 0 ? (
+                <div className="text-center py-12 text-gray-500"><div className="text-5xl mb-4">👍</div>No overdue tunings!</div>
+              ) : (
+                <div className="space-y-2">
+                  {tuningsOverdue.map((item, i) => (
+                    <div key={i} onClick={() => { setSelectedCustomerToBook(item.customer); setBookingType('OTS'); setView('planner'); }} className="flex justify-between items-center p-4 bg-red-50 rounded-lg border-l-4 border-red-500 cursor-pointer hover:bg-red-100">
+                      <div>
+                        <div className="font-bold">{item.customer.name}</div>
+                        <div className="text-sm text-red-600">Due: {item.monthName} {currentYear}</div>
+                      </div>
+                      <div className="text-red-600 font-bold">⚠️ Overdue</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* ========== UPCOMING TUNINGS ========== */}
+          {reportType === 'upcoming' && (
+            <div>
+              <h3 className="text-xl font-bold mb-4">Due Next Month - {monthNames[(new Date().getMonth() + 1) % 12]} ({tuningsNextMonth.length})</h3>
+              {tuningsNextMonth.length === 0 ? (
+                <div className="text-center py-12 text-gray-500"><div className="text-5xl mb-4">📅</div>All booked for next month!</div>
+              ) : (
+                <div className="space-y-2">
+                  {tuningsNextMonth.map(c => (
+                    <div key={c.id} onClick={() => { setSelectedCustomerToBook(c); setBookingType('OTS'); setView('planner'); }} className="flex justify-between items-center p-4 bg-amber-50 rounded-lg border-l-4 border-amber-400 cursor-pointer hover:bg-amber-100">
+                      <div>
+                        <div className="font-bold">{c.name}</div>
+                        <div className="text-sm text-gray-500">Rate: {formatCurrency(c.customRate || DEFAULT_PRICES.tuning_full)}</div>
+                      </div>
+                      <div className="text-amber-600">📞 Book →</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* ========== TOP CUSTOMERS ========== */}
+          {reportType === 'customers' && (
+            <div>
+              <h3 className="text-xl font-bold mb-4">Customer Revenue {selectedYear}</h3>
+              {customerRevenue.length === 0 ? (
+                <div className="text-center py-12 text-gray-500">No revenue data for {selectedYear}</div>
+              ) : (
+                <div className="space-y-2">
+                  {customerRevenue.slice(0, 25).map((r, i) => (
+                    <div key={r.customer.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${i < 3 ? 'bg-yellow-400 text-yellow-900' : 'bg-gray-200'}`}>{i + 1}</div>
+                        <div>
+                          <div className="font-bold">{r.customer.name}</div>
+                          <div className="text-xs text-gray-500">{r.count} jobs</div>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold text-green-600">{formatCurrency(r.total)}</div>
+                        <div className="text-xs">
+                          {r.paid > 0 && <span className="text-green-600">£{r.paid} paid</span>}
+                          {r.invoiced > 0 && <span className="text-blue-600 ml-2">£{r.invoiced} inv</span>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* ========== HOURS BY CUSTOMER ========== */}
+          {reportType === 'hours' && (
+            <div>
+              <h3 className="text-xl font-bold mb-4">Hours by Customer {selectedYear} (Estimated)</h3>
+              {hoursByCustomer.length === 0 ? (
+                <div className="text-center py-12 text-gray-500">No time data for {selectedYear}</div>
+              ) : (
+                <div className="space-y-2">
+                  {hoursByCustomer.slice(0, 25).map((r, i) => (
+                    <div key={r.customer.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                      <div className="font-medium">{r.customer.name}</div>
+                      <div className="font-bold text-blue-600">{r.hours} hrs</div>
+                    </div>
+                  ))}
+                  <div className="mt-4 p-4 bg-blue-100 rounded-lg">
+                    <div className="text-2xl font-bold text-blue-700">{hoursByCustomer.reduce((sum, r) => sum + r.hours, 0)} Total Hours</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* ========== UTILISATION ========== */}
+          {reportType === 'utilisation' && (
+            <div>
+              <h3 className="text-xl font-bold mb-4">Capacity & Utilisation {selectedYear}</h3>
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div className="bg-gray-100 rounded-lg p-6 text-center">
+                  <div className="text-4xl font-bold">{utilisation.totalWorkdays}</div>
+                  <div className="text-gray-600">Total Workdays (Mon-Fri)</div>
+                </div>
+                <div className="bg-yellow-100 rounded-lg p-6 text-center">
+                  <div className="text-4xl font-bold text-yellow-700">{utilisation.daysOffCount}</div>
+                  <div className="text-yellow-600">Days Off</div>
+                </div>
+                <div className="bg-blue-100 rounded-lg p-6 text-center">
+                  <div className="text-4xl font-bold text-blue-700">{utilisation.availableDays}</div>
+                  <div className="text-blue-600">Available Days</div>
+                </div>
+                <div className="bg-green-100 rounded-lg p-6 text-center">
+                  <div className="text-4xl font-bold text-green-700">{utilisation.bookedDays}</div>
+                  <div className="text-green-600">Booked Days</div>
+                </div>
+              </div>
+              <div className="p-6 bg-gray-800 text-white rounded-lg text-center">
+                <div className="text-5xl font-bold">{utilisation.utilisation}%</div>
+                <div className="text-gray-300 mt-2">Utilisation Rate</div>
+                <div className="mt-4 bg-gray-700 rounded-full h-4 overflow-hidden">
+                  <div className="bg-green-500 h-full" style={{ width: `${utilisation.utilisation}%` }}></div>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* ========== PROJECTS ========== */}
+          {reportType === 'projects' && (
+            <div>
+              <h3 className="text-xl font-bold mb-4">Project Profitability</h3>
+              {projectProfit.length === 0 ? (
+                <div className="text-center py-12 text-gray-500"><div className="text-5xl mb-4">🔧</div>No active projects</div>
+              ) : (
+                <div className="space-y-3">
+                  {projectProfit.map(p => (
+                    <div key={p.id} className="p-4 bg-purple-50 rounded-lg border-l-4 border-purple-500">
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <div className="text-sm text-gray-500">{p.customerName}</div>
+                          <div className="font-bold text-lg">{p.name}</div>
+                        </div>
+                        <div className={`text-xl font-bold ${p.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {p.profit >= 0 ? '+' : ''}{formatCurrency(p.profit)}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-5 gap-2 text-sm">
+                        <div><span className="text-gray-500">Days:</span> <span className="font-bold">{p.days.length}</span></div>
+                        <div><span className="text-gray-500">Hours:</span> <span className="font-bold">{p.totalHours.toFixed(1)}</span></div>
+                        <div><span className="text-gray-500">Labour:</span> <span className="font-bold">{formatCurrency(p.labourCost)}</span></div>
+                        <div><span className="text-gray-500">Materials:</span> <span className="font-bold">{formatCurrency(p.materialsCost)}</span></div>
+                        <div><span className="text-gray-500">Quoted:</span> <span className="font-bold">{formatCurrency(p.quotedTotal || 0)}</span></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* ========== NO SCHEDULE CUSTOMERS ========== */}
+          {reportType === 'noschedule' && (
+            <div>
+              <h3 className="text-xl font-bold mb-4">Customers Without Tuning Schedule ({noScheduleCustomers.length})</h3>
+              {noScheduleCustomers.length === 0 ? (
+                <div className="text-center py-12 text-gray-500"><div className="text-5xl mb-4">✅</div>All customers have schedules!</div>
+              ) : (
+                <div className="space-y-2">
+                  {noScheduleCustomers.map(c => (
+                    <div key={c.id} onClick={() => { setSelectedCustomer(c); setView('customerDetail'); }} className="flex justify-between items-center p-4 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100">
+                      <div className="font-medium">{c.name}</div>
+                      <div className="text-gray-400">Set schedule →</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   const CustomerDetailView = () => {
     const [localCustomer, setLocalCustomer] = useState(selectedCustomer);
     const customerContacts = contacts.filter(c => c.customerId === selectedCustomer.id);
@@ -1185,6 +1759,7 @@ const CommandCentre = () => {
           <div className="flex gap-2">
             <button onClick={() => { setView('planner'); setSelectedDay(null); setSelectedCustomer(null); }} className={`px-5 py-3 rounded-lg text-lg font-bold touch-target ${view === 'planner' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>📅 Planner</button>
             <button onClick={() => { setView('customers'); setSelectedCustomer(null); }} className={`px-5 py-3 rounded-lg text-lg font-bold touch-target ${view.includes('customer') ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>👥 Customers</button>
+            <button onClick={() => setView('reports')} className={`px-5 py-3 rounded-lg text-lg font-bold touch-target ${view === 'reports' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>📊 Reports</button>
           </div>
 
           {view === 'planner' && (
@@ -1396,6 +1971,7 @@ const CommandCentre = () => {
 
       {view === 'customers' && <CustomerListView />}
       {view === 'customerDetail' && selectedCustomer && <CustomerDetailView />}
+      {view === 'reports' && <ReportsView />}
       
       {showProjectSummary && <ProjectSummaryModal project={showProjectSummary} onClose={() => setShowProjectSummary(null)} />}
     </div>
