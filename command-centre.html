@@ -1058,6 +1058,7 @@ const CommandCentre = () => {
                   {!isProject && (
                     <div className="mt-3 pt-2 border-t flex gap-2 flex-wrap">
                       {booking.status === 'scheduled' && <button onClick={() => updateBookingStatus(booking.id, 'confirmed')} className="text-sm bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 touch-target">✓ Confirm</button>}
+                      {booking.status === 'scheduled' && <button onClick={() => removeBooking(date, booking.id)} className="text-sm bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 touch-target">✗ Decline</button>}
                       {booking.status === 'confirmed' && <button onClick={() => updateBookingStatus(booking.id, 'completed')} className="text-sm bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 touch-target">✓ Done</button>}
                       {booking.status === 'completed' && <button onClick={() => {
                         const customer = getCustomerById(booking.customerId);
