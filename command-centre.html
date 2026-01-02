@@ -209,13 +209,23 @@ const CommandCentre = () => {
 
   // Helper functions
   const getDateString = (year, month, day) => `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const parseLocalDate = (dateStr) => {
+    if (!dateStr) return new Date();
+    const [year, month, day] = dateStr.split('-').map(Number);
+    return new Date(year, month - 1, day);
+  };
   const getDayOfWeek = (year, month, day) => new Date(year, month, day).getDay();
   const isWorkDay = (year, month, day) => { const dow = getDayOfWeek(year, month, day); return dow >= 1 && dow <= 5; }; // Mon-Fri
   const getBookingsForDay = (date) => bookings.filter(b => b.date === date);
   const getCustomerById = (id) => customers.find(c => c.id === id);
   const getBookingContact = (customerId) => contacts.find(c => c.customerId === customerId && c.isBookingContact) || contacts.find(c => c.customerId === customerId);
   const isDayOff = (date) => daysOff.includes(date);
-  const formatDate = (dateStr) => { if (!dateStr) return ''; const d = new Date(dateStr); return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); };
+  const formatDate = (dateStr) => { 
+    if (!dateStr) return ''; 
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const d = new Date(year, month - 1, day); 
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); 
+  };
   const formatCurrency = (amount) => '£' + (parseFloat(amount) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const getJobTypeLabel = (type) => {
@@ -253,7 +263,7 @@ const CommandCentre = () => {
     );
   };
 
-  const getCustomerHistory = (customerId) => bookings.filter(b => b.customerId === customerId).sort((a, b) => new Date(b.date) - new Date(a.date));
+  const getCustomerHistory = (customerId) => bookings.filter(b => b.customerId === customerId).sort((a, b) => parseLocalDate(b.date) - parseLocalDate(a.date));
   const getLastTuningPrice = (customerId) => { const history = getCustomerHistory(customerId); const lastTuning = history.find(b => b.type?.startsWith('tuning') && b.status === 'paid'); return lastTuning ? parseFloat(lastTuning.price) : null; };
 
   // ============================================================
@@ -277,7 +287,7 @@ const CommandCentre = () => {
     // Count tunings already booked this year (any type that's tuning-related)
     const tuningsBookedThisYear = bookings.filter(b => {
       if (!b.date) return false;
-      const bookingYear = new Date(b.date).getFullYear();
+      const bookingYear = parseInt(b.date.split('-')[0]);
       if (bookingYear !== currentYear) return false;
       // Count OTS, TSC as tuning visits
       return b.type === 'OTS' || b.type === 'TSC' || b.type?.startsWith('tuning');
@@ -308,13 +318,13 @@ const CommandCentre = () => {
     const totalWorkdays = allWorkdays.length;
     
     // Days off this year
-    const daysOffThisYear = daysOff.filter(d => d && new Date(d).getFullYear() === currentYear);
+    const daysOffThisYear = daysOff.filter(d => d && parseInt(d.split('-')[0]) === currentYear);
     
     // Available workdays (minus days off)
     const availableWorkdays = allWorkdays.filter(d => !daysOffThisYear.includes(d));
     
     // Count bookings by type for this year
-    const yearBookings = bookings.filter(b => b.date && new Date(b.date).getFullYear() === currentYear);
+    const yearBookings = bookings.filter(b => b.date && parseInt(b.date.split('-')[0]) === currentYear);
     
     // Count unique days by booking type (a day counts once even if multiple bookings)
     const tuningDays = new Set();
@@ -975,7 +985,8 @@ const CommandCentre = () => {
   // ============================================================
   
   const DayPanel = ({ date, onClose }) => {
-    const d = new Date(date);
+    const [year, month, day] = date.split('-').map(Number);
+    const d = new Date(year, month - 1, day);
     const dayBookings = getBookingsForDay(date);
     const isOff = isDayOff(date);
 
@@ -1456,10 +1467,10 @@ const CommandCentre = () => {
     const getMonthlyIncome = () => {
       const months = Array(12).fill(0).map((_, i) => ({ month: i, income: 0, count: 0, tunings: 0, faults: 0, projects: 0 }));
       bookings.filter(b => {
-        const d = new Date(b.date);
+        const d = parseLocalDate(b.date);
         return d.getFullYear() === selectedYear && (b.status === 'completed' || b.status === 'invoiced' || b.status === 'paid');
       }).forEach(b => {
-        const m = new Date(b.date).getMonth();
+        const m = parseLocalDate(b.date).getMonth();
         months[m].income += parseFloat(b.price) || 0;
         months[m].count++;
         if (b.type === 'OTS' || b.type === 'TSC' || b.type === 'WS') months[m].tunings++;
@@ -1483,7 +1494,7 @@ const CommandCentre = () => {
       return bookings.filter(b => b.status === 'completed').map(b => ({
         ...b,
         customer: getCustomerById(b.customerId),
-        daysSince: Math.floor((new Date() - new Date(b.date)) / (1000 * 60 * 60 * 24))
+        daysSince: Math.floor((new Date() - parseLocalDate(b.date)) / (1000 * 60 * 60 * 24))
       })).sort((a, b) => b.daysSince - a.daysSince);
     };
     
@@ -1491,7 +1502,7 @@ const CommandCentre = () => {
     const getCustomerRevenue = () => {
       const revenue = {};
       bookings.filter(b => {
-        const d = new Date(b.date);
+        const d = parseLocalDate(b.date);
         return d.getFullYear() === selectedYear && (b.status === 'paid' || b.status === 'invoiced' || b.status === 'completed');
       }).forEach(b => {
         if (!revenue[b.customerId]) revenue[b.customerId] = { paid: 0, invoiced: 0, completed: 0, count: 0 };
@@ -1520,7 +1531,7 @@ const CommandCentre = () => {
     
     // Year summary
     const getYearSummary = () => {
-      const yearBookings = bookings.filter(b => new Date(b.date).getFullYear() === selectedYear);
+      const yearBookings = bookings.filter(b => parseInt(b.date.split('-')[0]) === selectedYear);
       const paid = yearBookings.filter(b => b.status === 'paid');
       const invoiced = yearBookings.filter(b => b.status === 'invoiced');
       const completed = yearBookings.filter(b => b.status === 'completed');
@@ -1557,7 +1568,7 @@ const CommandCentre = () => {
           if (month < currentMonth) {
             // Check if there's a tuning booked/done for this month this year
             const hasTuning = bookings.some(b => {
-              const d = new Date(b.date);
+              const d = parseLocalDate(b.date);
               return b.customerId === c.id && 
                      d.getFullYear() === currentYear && 
                      d.getMonth() === month &&
@@ -1581,7 +1592,7 @@ const CommandCentre = () => {
         .filter(c => {
           // Check if already booked for next month
           return !bookings.some(b => {
-            const d = new Date(b.date);
+            const d = parseLocalDate(b.date);
             return b.customerId === c.id && 
                    d.getMonth() === nextMonth &&
                    d.getFullYear() === (nextMonth === 0 ? currentYear + 1 : currentYear) &&
@@ -1594,7 +1605,7 @@ const CommandCentre = () => {
     const getHoursByCustomer = () => {
       const hours = {};
       // Would need timeEntries data - for now use booking estimates
-      bookings.filter(b => new Date(b.date).getFullYear() === selectedYear).forEach(b => {
+      bookings.filter(b => parseInt(b.date.split('-')[0]) === selectedYear).forEach(b => {
         if (!hours[b.customerId]) hours[b.customerId] = 0;
         // Estimate hours based on service type
         if (b.type === 'OTS') hours[b.customerId] += 6;
@@ -1622,10 +1633,10 @@ const CommandCentre = () => {
       });
       
       const totalWorkdays = workdaysInYear.reduce((a, b) => a + b, 0);
-      const daysOffCount = daysOff.filter(d => new Date(d).getFullYear() === selectedYear).length;
+      const daysOffCount = daysOff.filter(d => parseInt(d.split('-')[0]) === selectedYear).length;
       const availableDays = totalWorkdays - daysOffCount;
       
-      const bookedDays = new Set(bookings.filter(b => new Date(b.date).getFullYear() === selectedYear).map(b => b.date)).size;
+      const bookedDays = new Set(bookings.filter(b => parseInt(b.date.split('-')[0]) === selectedYear).map(b => b.date)).size;
       
       return {
         totalWorkdays,
@@ -1787,7 +1798,7 @@ const CommandCentre = () => {
                     <div key={b.id} className={`flex justify-between items-center p-4 rounded-lg border-l-4 ${b.daysSince > 30 ? 'bg-red-50 border-red-500' : b.daysSince > 14 ? 'bg-amber-50 border-amber-500' : 'bg-blue-50 border-blue-500'}`}>
                       <div>
                         <div className="font-bold">{b.customer?.name || 'Unknown'}</div>
-                        <div className="text-sm text-gray-500">{new Date(b.date).toLocaleDateString('en-GB')} • {b.daysSince} days ago</div>
+                        <div className="text-sm text-gray-500">{parseLocalDate(b.date).toLocaleDateString('en-GB')} • {b.daysSince} days ago</div>
                       </div>
                       <div className="text-right">
                         <div className="font-bold text-lg">{formatCurrency(b.price)}</div>
@@ -1815,7 +1826,7 @@ const CommandCentre = () => {
                     <div key={b.id} className={`flex justify-between items-center p-4 rounded-lg border-l-4 ${b.daysSince > 14 ? 'bg-red-50 border-red-500' : b.daysSince > 7 ? 'bg-amber-50 border-amber-500' : 'bg-gray-50 border-gray-300'}`}>
                       <div>
                         <div className="font-bold">{b.customer?.name || 'Unknown'}</div>
-                        <div className="text-sm text-gray-500">{new Date(b.date).toLocaleDateString('en-GB')} • {getJobTypeLabel(b.type)} • {b.daysSince} days ago</div>
+                        <div className="text-sm text-gray-500">{parseLocalDate(b.date).toLocaleDateString('en-GB')} • {getJobTypeLabel(b.type)} • {b.daysSince} days ago</div>
                       </div>
                       <div className="text-right">
                         <div className="font-bold text-lg">{formatCurrency(b.price)}</div>
