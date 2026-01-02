@@ -1859,6 +1859,25 @@ const CommandCentre = () => {
             
             <div className="border-b-2 mb-4 mt-4"></div>
 
+            <h2 className="text-xl font-bold mb-3">📋 Tunings Due</h2>
+            <div className="space-y-2 mb-4">
+              {jobsDue.length === 0 ? (
+                <div className="text-center py-8"><div className="text-5xl mb-3">🎉</div><p className="text-gray-500 text-lg">All caught up!</p></div>
+              ) : (
+                jobsDue.map((item, idx) => (
+                  <div key={idx} onClick={() => { setSelectedCustomerToBook(item.customer); setBookingType('OTS'); setCustomQuote(''); setJobNotes(''); }}
+                    className={`p-4 rounded-lg cursor-pointer transition-all touch-target ${item.urgent ? 'bg-amber-50 border-2 border-amber-400' : 'bg-gray-50 border-2 border-gray-200'} ${selectedCustomerToBook?.id === item.customer.id ? 'ring-4 ring-green-500' : 'hover:border-blue-400'}`}>
+                    <div className="font-bold text-lg">{item.customer.name}</div>
+                    <div className="flex justify-between items-center mt-1">
+                      <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{item.monthName} {item.urgent && '⚠️'}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            
+            <div className="border-b-2 mb-4"></div>
+
             <div className="mb-4">
               <h2 className="text-lg font-bold mb-2">🔧 Big Jobs</h2>
               
@@ -1937,25 +1956,6 @@ const CommandCentre = () => {
               
               {!showNewProject && !allocatingProject && (
                 <button onClick={() => setShowNewProject(true)} className="w-full py-3 bg-purple-100 hover:bg-purple-200 text-purple-700 rounded-lg font-medium touch-target border-2 border-purple-300">+ New Big Job</button>
-              )}
-            </div>
-            
-            <div className="border-b-2 mb-4"></div>
-
-            <h2 className="text-xl font-bold mb-3">📋 Tunings Due</h2>
-            <div className="space-y-2">
-              {jobsDue.length === 0 ? (
-                <div className="text-center py-8"><div className="text-5xl mb-3">🎉</div><p className="text-gray-500 text-lg">All caught up!</p></div>
-              ) : (
-                jobsDue.map((item, idx) => (
-                  <div key={idx} onClick={() => { setSelectedCustomerToBook(item.customer); setBookingType('OTS'); setCustomQuote(''); setJobNotes(''); }}
-                    className={`p-4 rounded-lg cursor-pointer transition-all touch-target ${item.urgent ? 'bg-amber-50 border-2 border-amber-400' : 'bg-gray-50 border-2 border-gray-200'} ${selectedCustomerToBook?.id === item.customer.id ? 'ring-4 ring-green-500' : 'hover:border-blue-400'}`}>
-                    <div className="font-bold text-lg">{item.customer.name}</div>
-                    <div className="flex justify-between items-center mt-1">
-                      <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{item.monthName} {item.urgent && '⚠️'}</span>
-                    </div>
-                  </div>
-                ))
               )}
             </div>
           </div>
