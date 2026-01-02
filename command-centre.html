@@ -82,11 +82,14 @@ const CommandCentre = () => {
 
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedCustomerToBook, setSelectedCustomerToBook] = useState(null);
+  const [selectedGroupToBook, setSelectedGroupToBook] = useState(null); // Array of items when booking a group
   const [selectedTicketToBook, setSelectedTicketToBook] = useState(null);
   const [selectedDay, setSelectedDay] = useState(null);
   const [view, setView] = useState('planner');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [editingCustomer, setEditingCustomer] = useState(null);
+  const [tuningGroupSearch, setTuningGroupSearch] = useState('');
+  const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [bookingType, setBookingType] = useState('OTS');
   const [customQuote, setCustomQuote] = useState('');
   const [jobNotes, setJobNotes] = useState('');
@@ -736,8 +739,17 @@ const CommandCentre = () => {
       const isFault = selectedTicketToBook !== null;
       const type = isFault ? 'fault' : bookingType;
       const price = customQuote ? parseFloat(customQuote) : (isFault ? DEFAULT_PRICES.fault : 0); 
-      // For faults, pass serviceType (OTS/TSC/WS) separately for pricing reference
-      addBooking(dateStr, selectedCustomerToBook.id, type, price, jobNotes, selectedTicketToBook, isFault ? bookingType : null); 
+      
+      // If booking a group, book all customers in the group
+      if (selectedGroupToBook && selectedGroupToBook.length > 1) {
+        for (const item of selectedGroupToBook) {
+          await addBooking(dateStr, item.customer.id, type, price, jobNotes, null, isFault ? bookingType : null);
+        }
+        setSelectedGroupToBook(null);
+      } else {
+        // For faults, pass serviceType (OTS/TSC/WS) separately for pricing reference
+        addBooking(dateStr, selectedCustomerToBook.id, type, price, jobNotes, selectedTicketToBook, isFault ? bookingType : null);
+      }
     }
     else { setSelectedDay(dateStr); }
   };
@@ -786,6 +798,7 @@ const CommandCentre = () => {
         customRate: customer.customRate,
         tuningMonths: customer.tuningMonths || [],
         tuningNotes: customer.tuningNotes,
+        tuningGroup: customer.tuningGroup || '',
         distance: customer.distance
       }) });
       setCustomers(customers.map(c => c.id === customer.id ? customer : c));
@@ -1927,7 +1940,7 @@ const CommandCentre = () => {
               ) : (
                 <div className="space-y-2">
                   {noScheduleCustomers.map(c => (
-                    <div key={c.id} onClick={() => { setSelectedCustomer(c); setEditingCustomer({...c}); setView('customerDetail'); }} className="flex justify-between items-center p-4 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100">
+                    <div key={c.id} onClick={() => { setSelectedCustomer(c); setEditingCustomer({...c}); setTuningGroupSearch(c.tuningGroup || ''); setView('customerDetail'); }} className="flex justify-between items-center p-4 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100">
                       <div className="font-medium">{c.name}</div>
                       <div className="text-gray-400">Set schedule →</div>
                     </div>
@@ -1939,6 +1952,18 @@ const CommandCentre = () => {
         </div>
       </div>
     );
+  };
+
+  // Get unique tuning groups from all customers
+  const existingTuningGroups = [...new Set(customers.map(c => c.tuningGroup).filter(g => g && g.trim()))].sort();
+  
+  const setTuningGroup = async (groupName) => {
+    if (!editingCustomer) return;
+    const updated = { ...editingCustomer, tuningGroup: groupName };
+    setEditingCustomer(updated);
+    setTuningGroupSearch(groupName);
+    setShowGroupDropdown(false);
+    await updateCustomer(updated);
   };
 
   const toggleTuningMonth = async (monthIdx) => {
@@ -1978,6 +2003,70 @@ const CommandCentre = () => {
             </div>
           </div>
         )}
+
+        <div className="border-t-2 pt-4 mb-6">
+          <h3 className="font-bold text-xl mb-3">🔗 Tuning Group</h3>
+          <p className="text-sm text-gray-500 mb-2">Group organs that are tuned together (e.g. same benefice or area)</p>
+          <div className="relative">
+            <input
+              type="text"
+              placeholder="Type to search or create group..."
+              value={tuningGroupSearch}
+              onChange={(e) => { setTuningGroupSearch(e.target.value); setShowGroupDropdown(true); }}
+              onFocus={() => setShowGroupDropdown(true)}
+              onBlur={() => setTimeout(() => setShowGroupDropdown(false), 200)}
+              className="w-full p-3 border-2 rounded-lg text-lg"
+            />
+            {editingCustomer.tuningGroup && (
+              <button 
+                onClick={() => setTuningGroup('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 text-xl"
+              >✕</button>
+            )}
+            {showGroupDropdown && (
+              <div className="absolute top-full left-0 right-0 bg-white border-2 rounded-b-lg shadow-lg max-h-48 overflow-y-auto z-50">
+                {tuningGroupSearch && !existingTuningGroups.includes(tuningGroupSearch) && (
+                  <div 
+                    onClick={() => setTuningGroup(tuningGroupSearch)}
+                    className="p-3 hover:bg-green-50 cursor-pointer border-b bg-green-50"
+                  >
+                    <span className="text-green-600 font-medium">+ Create "{tuningGroupSearch}"</span>
+                  </div>
+                )}
+                {existingTuningGroups
+                  .filter(g => !tuningGroupSearch || g.toLowerCase().includes(tuningGroupSearch.toLowerCase()))
+                  .map(group => (
+                    <div 
+                      key={group}
+                      onClick={() => setTuningGroup(group)}
+                      className={`p-3 hover:bg-blue-50 cursor-pointer border-b ${editingCustomer.tuningGroup === group ? 'bg-blue-100' : ''}`}
+                    >
+                      {group}
+                      <span className="text-gray-400 text-sm ml-2">
+                        ({customers.filter(c => c.tuningGroup === group).length} organs)
+                      </span>
+                    </div>
+                  ))}
+                {existingTuningGroups.length === 0 && !tuningGroupSearch && (
+                  <div className="p-3 text-gray-400 italic">No groups yet - type to create one</div>
+                )}
+              </div>
+            )}
+          </div>
+          {editingCustomer.tuningGroup && (
+            <div className="mt-3 p-3 bg-blue-50 rounded-lg">
+              <div className="text-sm text-blue-700 font-medium mb-2">Other organs in "{editingCustomer.tuningGroup}":</div>
+              <div className="flex flex-wrap gap-2">
+                {customers.filter(c => c.tuningGroup === editingCustomer.tuningGroup && c.id !== editingCustomer.id).map(c => (
+                  <span key={c.id} className="bg-white px-3 py-1 rounded-full text-sm border">{c.name}</span>
+                ))}
+                {customers.filter(c => c.tuningGroup === editingCustomer.tuningGroup && c.id !== editingCustomer.id).length === 0 && (
+                  <span className="text-gray-400 italic">No other organs in this group yet</span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
 
         <div className="border-t-2 pt-4 mb-6">
           <h3 className="font-bold text-xl mb-3">📅 Tuning Schedule</h3>
@@ -2061,9 +2150,19 @@ const CommandCentre = () => {
           {/* LEFT PANEL - scrolls as one unit */}
           <div className="w-80 bg-white rounded-lg shadow-xl p-4 no-print overflow-y-auto scroll-panel" style={{maxHeight: 'calc(100vh - 160px)'}}>
             {selectedCustomerToBook && (
-              <div className={`border-2 rounded-lg p-4 mb-3 booking-highlight ${selectedTicketToBook ? 'bg-orange-100 border-orange-500' : 'bg-green-100 border-green-500'}`}>
-                <div className={`font-bold text-lg ${selectedTicketToBook ? 'text-orange-800' : 'text-green-800'}`}>{selectedTicketToBook ? '🔧 Booking Fault:' : '📍 Booking:'}</div>
-                <div className={`font-medium text-lg ${selectedTicketToBook ? 'text-orange-700' : 'text-green-700'}`}>{selectedCustomerToBook.name}</div>
+              <div className={`border-2 rounded-lg p-4 mb-3 booking-highlight ${selectedTicketToBook ? 'bg-orange-100 border-orange-500' : selectedGroupToBook ? 'bg-blue-100 border-blue-500' : 'bg-green-100 border-green-500'}`}>
+                <div className={`font-bold text-lg ${selectedTicketToBook ? 'text-orange-800' : selectedGroupToBook ? 'text-blue-800' : 'text-green-800'}`}>
+                  {selectedTicketToBook ? '🔧 Booking Fault:' : selectedGroupToBook ? `🔗 Booking Group (${selectedGroupToBook.length}):` : '📍 Booking:'}
+                </div>
+                {selectedGroupToBook ? (
+                  <div className="space-y-1 mt-2">
+                    {selectedGroupToBook.map((item, idx) => (
+                      <div key={idx} className="font-medium text-blue-700 bg-white rounded px-2 py-1">{item.customer.name}</div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className={`font-medium text-lg ${selectedTicketToBook ? 'text-orange-700' : 'text-green-700'}`}>{selectedCustomerToBook.name}</div>
+                )}
                 {selectedTicketToBook && <div className="text-sm text-orange-600 mt-1">"{selectedTicketToBook.description}"</div>}
                 
                 <div className="grid grid-cols-3 gap-2 mt-3">
@@ -2123,7 +2222,7 @@ const CommandCentre = () => {
                 })()}
                 
                 <div className={`text-lg mt-4 font-bold text-center p-3 rounded-lg ${selectedTicketToBook ? 'text-orange-700 bg-orange-200' : 'text-green-700 bg-green-200'}`}>👆 Now tap a day on the calendar</div>
-                <button onClick={() => { setSelectedCustomerToBook(null); setSelectedTicketToBook(null); setCustomQuote(''); setJobNotes(''); }} className="w-full mt-3 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target">Cancel</button>
+                <button onClick={() => { setSelectedCustomerToBook(null); setSelectedGroupToBook(null); setSelectedTicketToBook(null); setCustomQuote(''); setJobNotes(''); }} className="w-full mt-3 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target">Cancel</button>
               </div>
             )}
             
@@ -2187,17 +2286,78 @@ const CommandCentre = () => {
             <div className="space-y-2 mb-4">
               {jobsDue.length === 0 ? (
                 <div className="text-center py-8"><div className="text-5xl mb-3">🎉</div><p className="text-gray-500 text-lg">All caught up!</p></div>
-              ) : (
-                jobsDue.map((item, idx) => (
-                  <div key={idx} onClick={() => { setSelectedCustomerToBook(item.customer); setBookingType('OTS'); setCustomQuote(''); setJobNotes(''); }}
-                    className={`p-4 rounded-lg cursor-pointer transition-all touch-target ${item.urgent ? 'bg-amber-50 border-2 border-amber-400' : 'bg-gray-50 border-2 border-gray-200'} ${selectedCustomerToBook?.id === item.customer.id ? 'ring-4 ring-green-500' : 'hover:border-blue-400'}`}>
-                    <div className="font-bold text-lg">{item.customer.name}</div>
-                    <div className="flex justify-between items-center mt-1">
-                      <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{item.monthName} {item.urgent && '⚠️'}</span>
-                    </div>
-                  </div>
-                ))
-              )}
+              ) : (() => {
+                // Group jobs by tuningGroup
+                const grouped = {};
+                const ungrouped = [];
+                jobsDue.forEach(item => {
+                  const group = item.customer.tuningGroup;
+                  if (group) {
+                    if (!grouped[group]) grouped[group] = [];
+                    grouped[group].push(item);
+                  } else {
+                    ungrouped.push(item);
+                  }
+                });
+                
+                return (
+                  <>
+                    {/* Grouped tunings */}
+                    {Object.entries(grouped).map(([groupName, items]) => (
+                      <div key={groupName} className={`rounded-lg border-2 overflow-hidden ${items.some(i => i.urgent) ? 'border-amber-400 bg-amber-50' : 'border-blue-300 bg-blue-50'}`}>
+                        <div className="p-3 bg-white border-b flex justify-between items-center">
+                          <div>
+                            <span className="font-bold text-lg">🔗 {groupName}</span>
+                            <span className="text-sm text-gray-500 ml-2">({items.length} organs)</span>
+                          </div>
+                          {items.some(i => i.urgent) && <span className="text-amber-600 font-bold">⚠️</span>}
+                        </div>
+                        <div className="p-2 space-y-1">
+                          {items.map((item, idx) => (
+                            <div 
+                              key={idx}
+                              onClick={() => { setSelectedCustomerToBook(item.customer); setBookingType('OTS'); setCustomQuote(''); setJobNotes(''); }}
+                              className={`p-3 rounded cursor-pointer transition-all ${selectedCustomerToBook?.id === item.customer.id ? 'bg-green-200 ring-2 ring-green-500' : 'bg-white hover:bg-gray-100'}`}
+                            >
+                              <div className="flex justify-between">
+                                <span className="font-medium">{item.customer.name}</span>
+                                <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{item.monthName}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="p-2 border-t bg-white">
+                          <button
+                            onClick={() => {
+                              // Select all customers in group for booking
+                              const firstItem = items[0];
+                              setSelectedCustomerToBook(firstItem.customer);
+                              setSelectedGroupToBook(items);
+                              setBookingType('OTS');
+                              setCustomQuote('');
+                              setJobNotes('');
+                            }}
+                            className="w-full py-2 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600"
+                          >
+                            📅 Book All {items.length} Together
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    
+                    {/* Ungrouped tunings */}
+                    {ungrouped.map((item, idx) => (
+                      <div key={`ungrouped-${idx}`} onClick={() => { setSelectedCustomerToBook(item.customer); setSelectedGroupToBook(null); setBookingType('OTS'); setCustomQuote(''); setJobNotes(''); }}
+                        className={`p-4 rounded-lg cursor-pointer transition-all touch-target ${item.urgent ? 'bg-amber-50 border-2 border-amber-400' : 'bg-gray-50 border-2 border-gray-200'} ${selectedCustomerToBook?.id === item.customer.id ? 'ring-4 ring-green-500' : 'hover:border-blue-400'}`}>
+                        <div className="font-bold text-lg">{item.customer.name}</div>
+                        <div className="flex justify-between items-center mt-1">
+                          <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{item.monthName} {item.urgent && '⚠️'}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                );
+              })()}
             </div>
             
             <div className="border-b-2 mb-4"></div>
@@ -2322,7 +2482,7 @@ const CommandCentre = () => {
               .filter(c => !customerListSearch || c.name.toLowerCase().includes(customerListSearch.toLowerCase()))
               .sort((a, b) => a.name.localeCompare(b.name))
               .map(c => (
-              <div key={c.id} onClick={() => { setSelectedCustomer(c); setEditingCustomer({...c}); setView('customerDetail'); }} className="border-2 rounded-lg p-4 hover:bg-gray-50 cursor-pointer flex justify-between items-center touch-target">
+              <div key={c.id} onClick={() => { setSelectedCustomer(c); setEditingCustomer({...c}); setTuningGroupSearch(c.tuningGroup || ''); setView('customerDetail'); }} className="border-2 rounded-lg p-4 hover:bg-gray-50 cursor-pointer flex justify-between items-center touch-target">
                 <div>
                   <div className="font-bold text-xl">{c.name}</div>
                   <div className="flex gap-1 mt-2 flex-wrap">
