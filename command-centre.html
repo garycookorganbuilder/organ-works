@@ -957,7 +957,32 @@ const CommandCentre = () => {
                   {!isProject && (
                     <div className="mt-3 pt-2 border-t flex gap-2 flex-wrap">
                       {booking.status === 'scheduled' && <button onClick={() => updateBookingStatus(booking.id, 'completed')} className="text-sm bg-white px-4 py-2 rounded-lg hover:bg-green-100 touch-target">✓ Done</button>}
-                      {booking.status === 'completed' && <button onClick={() => setShowInvoiceCalc(booking)} className="text-sm bg-amber-200 px-4 py-2 rounded-lg hover:bg-amber-300 touch-target">📧 Invoice</button>}
+                      {booking.status === 'completed' && <button onClick={() => {
+                        const customer = getCustomerById(booking.customerId);
+                        const distance = customer?.distance || 0;
+                        const actualHours = parseFloat(booking.actualHours) || 0;
+                        const suggestedBand = Math.max(4, Math.ceil(actualHours || 4));
+                        setSelectedBand(suggestedBand);
+                        // Load existing materials from booking
+                        let existingMaterials = [];
+                        if (booking.materials) {
+                          try {
+                            existingMaterials = JSON.parse(booking.materials);
+                          } catch (e) {
+                            existingMaterials = [];
+                          }
+                        }
+                        setInvoiceMaterials(existingMaterials);
+                        setNewMaterialDesc('');
+                        setNewMaterialCost('');
+                        setMaterialSearch('');
+                        setMaterialQty(1);
+                        setNewMaterialQty(1);
+                        setSelectedMaterial(null);
+                        setCustomAmount('');
+                        setSelectedDistance(null);
+                        setShowInvoiceCalc({ ...booking, distance, actualHours });
+                      }} className="text-sm bg-amber-200 px-4 py-2 rounded-lg hover:bg-amber-300 touch-target">📧 Invoice</button>}
                       {booking.status === 'invoiced' && <button onClick={() => updateBookingStatus(booking.id, 'paid')} className="text-sm bg-green-200 px-4 py-2 rounded-lg hover:bg-green-300 touch-target">💷 Paid</button>}
                       {booking.status === 'paid' && <span className="text-sm bg-green-500 text-white px-4 py-2 rounded-lg">✓ Paid</span>}
                     </div>
@@ -974,145 +999,240 @@ const CommandCentre = () => {
   };
 
   // ============================================================
-  // INVOICE MODAL
+  // INVOICE CALCULATOR MODAL
   // ============================================================
   
-  const InvoiceModal = ({ booking, onClose }) => {
-    if (!booking) return null;
+  const InvoiceCalcModal = () => {
+    if (!showInvoiceCalc) return null;
     
-    const customer = getCustomerById(booking.customerId);
-    const [adjustedPrice, setAdjustedPrice] = useState(booking.price || 0);
-    const [invoiceNumber, setInvoiceNumber] = useState('');
-    const [invoiceNotes, setInvoiceNotes] = useState(booking.notes || '');
-    const [materials, setMaterials] = useState([]);
-    const [newMatDesc, setNewMatDesc] = useState('');
-    const [newMatCost, setNewMatCost] = useState('');
+    const customer = getCustomerById(showInvoiceCalc.customerId);
+    const serviceType = showInvoiceCalc.serviceType || showInvoiceCalc.type || 'TSC';
     
-    const materialsTotal = materials.reduce((sum, m) => sum + (parseFloat(m.cost) || 0), 0);
-    const grandTotal = (parseFloat(adjustedPrice) || 0) + materialsTotal;
+    // Auto-suggest time band based on actual hours
+    const suggestedBand = Math.max(4, Math.ceil(showInvoiceCalc.actualHours || 4));
     
-    const addMaterial = () => {
-      if (newMatDesc && newMatCost) {
-        setMaterials([...materials, { desc: newMatDesc, cost: parseFloat(newMatCost) || 0 }]);
-        setNewMatDesc('');
-        setNewMatCost('');
+    // Calculate totals
+    const band = pricing.timeBands.find(b => b.hours === selectedBand);
+    const bandPrice = band ? (band[serviceType] || band.TSC || 0) : 0;
+    const serviceCharge = customAmount ? parseFloat(customAmount) : bandPrice;
+    
+    const autoDistancePremium = pricing.distanceBands.find(d => 
+      (showInvoiceCalc.distance || 0) >= d.minMiles && 
+      (showInvoiceCalc.distance || 0) <= d.maxMiles
+    )?.premium || 0;
+    const distancePremium = selectedDistance !== null ? selectedDistance : autoDistancePremium;
+    
+    const materialsTotal = invoiceMaterials.reduce((sum, m) => sum + ((m.cost || 0) * (m.quantity || 1)), 0);
+    const total = serviceCharge + distancePremium + materialsTotal;
+    
+    const handleAddMaterial = () => {
+      if (newMaterialDesc && newMaterialCost) {
+        setInvoiceMaterials([...invoiceMaterials, { 
+          description: newMaterialDesc, 
+          cost: parseFloat(newMaterialCost) || 0,
+          quantity: newMaterialQty || 1
+        }]);
+        setNewMaterialDesc('');
+        setNewMaterialCost('');
+        setNewMaterialQty(1);
       }
     };
     
-    const removeMaterial = (idx) => {
-      setMaterials(materials.filter((_, i) => i !== idx));
-    };
-    
     const handleConfirm = async () => {
-      // Update booking with final price and mark as invoiced
-      const updates = {
-        id: booking.id,
-        price: grandTotal,
-        status: 'invoiced',
-        invoiceDate: new Date().toISOString().split('T')[0],
-        invoiceNumber: invoiceNumber,
-        notes: invoiceNotes,
-        materials: materials.length > 0 ? JSON.stringify(materials) : ''
-      };
-      
+      setSaving(true);
       try {
-        await apiCall('updateBooking', { data: JSON.stringify(updates) });
-        setBookings(prev => prev.map(b => b.id === booking.id ? { ...b, ...updates } : b));
-        onClose();
+        await apiCall('updateBooking', {
+          data: JSON.stringify({
+            id: showInvoiceCalc.id,
+            price: total,
+            status: 'invoiced',
+            materials: JSON.stringify(invoiceMaterials),
+            invoiceDate: new Date().toISOString().split('T')[0]
+          })
+        });
+        
+        setBookings(bookings.map(b => 
+          b.id === showInvoiceCalc.id 
+            ? { ...b, price: total, status: 'invoiced', materials: JSON.stringify(invoiceMaterials), invoiceDate: new Date().toISOString().split('T')[0] }
+            : b
+        ));
+        setShowInvoiceCalc(null);
+        setSelectedBand(null);
+        setLastSaved(new Date());
       } catch (err) {
         alert('Failed to update: ' + err.message);
+      } finally {
+        setSaving(false);
       }
     };
     
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
-          <h2 className="text-2xl font-bold mb-4">📧 Invoice Review</h2>
+          <h2 className="text-2xl font-bold mb-4">📧 Invoice Calculator</h2>
           
-          <div className="bg-gray-100 rounded-lg p-4 mb-4">
+          {/* Job Info */}
+          <div className="bg-blue-50 rounded-lg p-4 mb-4">
             <div className="font-bold text-lg">{customer?.name || 'Unknown'}</div>
-            <div className="text-gray-600">{formatDate(booking.date)} • {getJobTypeLabel(booking.type)}</div>
+            <div className="text-blue-700">
+              Actual time: {showInvoiceCalc.actualHours 
+                ? `${Math.floor(showInvoiceCalc.actualHours)}h ${Math.round((showInvoiceCalc.actualHours % 1) * 60)}m` 
+                : 'Not recorded'}
+            </div>
+            <div className="text-sm text-gray-500">Service: {getJobTypeLabel(serviceType)}</div>
           </div>
           
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Invoice Number (optional)</label>
-              <input 
-                type="text" 
-                value={invoiceNumber} 
-                onChange={(e) => setInvoiceNumber(e.target.value)}
-                placeholder="e.g. INV-001"
-                className="w-full p-3 border-2 rounded-lg"
+          {/* Time band selection */}
+          <div className="mb-4">
+            <div className="text-sm text-gray-600 mb-2">Select time band:</div>
+            <div className="grid grid-cols-5 gap-2 mb-2">
+              {pricing.timeBands.map(b => {
+                const price = b[serviceType] || b.TSC || 0;
+                const isSelected = selectedBand === b.hours && !customAmount;
+                const isSuggested = suggestedBand === b.hours;
+                
+                return (
+                  <button
+                    key={b.hours}
+                    onClick={() => { setSelectedBand(b.hours); setCustomAmount(''); }}
+                    className={`p-3 rounded-lg text-center border-2 transition-all ${
+                      isSelected 
+                        ? 'bg-blue-500 text-white border-blue-500' 
+                        : isSuggested
+                          ? 'bg-blue-100 border-blue-300'
+                          : 'bg-white border-gray-200 hover:border-blue-300'
+                    }`}
+                  >
+                    <div className="font-bold">{b.hours}h</div>
+                    <div className="text-sm">£{price}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-500">Custom:</span>
+              <span className="text-gray-400">£</span>
+              <input
+                type="number"
+                placeholder="Enter amount"
+                value={customAmount}
+                onChange={(e) => setCustomAmount(e.target.value)}
+                className={`flex-1 p-2 border-2 rounded text-sm ${customAmount ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}
               />
-            </div>
-            
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Labour / Service</label>
-              <div className="flex items-center gap-2">
-                <span className="text-2xl">£</span>
-                <input 
-                  type="number" 
-                  value={adjustedPrice} 
-                  onChange={(e) => setAdjustedPrice(e.target.value)}
-                  className="flex-1 p-3 border-2 rounded-lg text-xl font-bold"
-                  step="0.01"
-                />
-              </div>
-            </div>
-            
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Materials</label>
-              {materials.map((m, idx) => (
-                <div key={idx} className="flex items-center gap-2 mb-2 bg-gray-50 p-2 rounded">
-                  <span className="flex-1">{m.desc}</span>
-                  <span className="font-medium">£{m.cost.toFixed(2)}</span>
-                  <button onClick={() => removeMaterial(idx)} className="text-red-500 hover:text-red-700">✕</button>
-                </div>
-              ))}
-              <div className="flex gap-2">
-                <input 
-                  type="text" 
-                  value={newMatDesc} 
-                  onChange={(e) => setNewMatDesc(e.target.value)}
-                  placeholder="Description"
-                  className="flex-1 p-2 border rounded"
-                />
-                <input 
-                  type="number" 
-                  value={newMatCost} 
-                  onChange={(e) => setNewMatCost(e.target.value)}
-                  placeholder="£"
-                  className="w-20 p-2 border rounded"
-                  step="0.01"
-                />
-                <button onClick={addMaterial} className="px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">+</button>
-              </div>
-            </div>
-            
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-              <textarea 
-                value={invoiceNotes} 
-                onChange={(e) => setInvoiceNotes(e.target.value)}
-                className="w-full p-3 border-2 rounded-lg"
-                rows={2}
-              />
-            </div>
-            
-            <div className="bg-green-100 rounded-lg p-4 text-center">
-              <div className="text-sm text-green-700">Total to Invoice</div>
-              <div className="text-3xl font-bold text-green-800">£{grandTotal.toFixed(2)}</div>
-              {materialsTotal > 0 && (
-                <div className="text-sm text-green-600 mt-1">
-                  (Labour £{parseFloat(adjustedPrice).toFixed(2)} + Materials £{materialsTotal.toFixed(2)})
-                </div>
-              )}
             </div>
           </div>
           
-          <div className="flex gap-3 mt-6">
-            <button onClick={onClose} className="flex-1 py-3 bg-gray-200 rounded-lg font-medium hover:bg-gray-300">Cancel</button>
-            <button onClick={handleConfirm} className="flex-1 py-3 bg-amber-500 text-white rounded-lg font-medium hover:bg-amber-600">📧 Mark Invoiced</button>
+          {/* Distance premium */}
+          <div className="bg-gray-100 rounded-lg p-4 mb-4">
+            <div className="flex justify-between mb-2">
+              <span className="text-gray-600">Distance</span>
+              <span>{showInvoiceCalc.distance || 0} miles</span>
+            </div>
+            <div className="text-sm text-gray-600 mb-2">Select distance band:</div>
+            <div className="grid grid-cols-4 gap-2">
+              {pricing.distanceBands.map((band, idx) => {
+                const autoSelected = (showInvoiceCalc.distance || 0) >= band.minMiles && 
+                                     (showInvoiceCalc.distance || 0) <= band.maxMiles;
+                const isSelected = selectedDistance !== null 
+                  ? selectedDistance === band.premium 
+                  : autoSelected;
+                
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => setSelectedDistance(band.premium)}
+                    className={`p-2 rounded-lg text-center border-2 transition-all ${
+                      isSelected 
+                        ? 'bg-green-500 text-white border-green-500' 
+                        : 'bg-white border-gray-200 hover:border-green-300'
+                    }`}
+                  >
+                    <div className="text-xs">{band.minMiles}-{band.maxMiles}mi</div>
+                    <div className="font-bold">+£{band.premium}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          
+          {/* Materials */}
+          <div className="bg-gray-100 rounded-lg p-4 mb-4">
+            <div className="text-sm text-gray-600 mb-2">Materials / Parts</div>
+            
+            {invoiceMaterials.length > 0 && (
+              <div className="space-y-1 mb-3">
+                {invoiceMaterials.map((mat, idx) => {
+                  const qty = mat.quantity || 1;
+                  const lineTotal = ((mat.cost || 0) * qty).toFixed(2);
+                  return (
+                    <div key={idx} className="flex justify-between items-center bg-white p-2 rounded">
+                      <span className="text-sm">{mat.description} {qty > 1 ? `×${qty}` : ''}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">£{lineTotal}</span>
+                        <button onClick={() => setInvoiceMaterials(invoiceMaterials.filter((_, i) => i !== idx))} className="text-red-500 hover:text-red-700">✕</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="Description"
+                value={newMaterialDesc}
+                onChange={(e) => setNewMaterialDesc(e.target.value)}
+                className="flex-1 p-2 border rounded text-sm"
+              />
+              <input
+                type="number"
+                placeholder="Qty"
+                value={newMaterialQty}
+                onChange={(e) => setNewMaterialQty(parseInt(e.target.value) || 1)}
+                className="w-14 p-2 border rounded text-sm text-center"
+                min="1"
+              />
+              <input
+                type="number"
+                placeholder="£"
+                value={newMaterialCost}
+                onChange={(e) => setNewMaterialCost(e.target.value)}
+                className="w-20 p-2 border rounded text-sm"
+                step="0.01"
+              />
+              <button onClick={handleAddMaterial} className="px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">+</button>
+            </div>
+          </div>
+          
+          {/* Total breakdown */}
+          <div className="border-t-2 pt-4 mb-4">
+            <div className="flex justify-between text-lg">
+              <span>Service {customAmount ? '(custom)' : `(${selectedBand}h)`}</span>
+              <span>£{serviceCharge.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between text-lg">
+              <span>Distance</span>
+              <span>+£{distancePremium}</span>
+            </div>
+            {materialsTotal > 0 && (
+              <div className="flex justify-between text-lg">
+                <span>Materials</span>
+                <span>+£{materialsTotal.toFixed(2)}</span>
+              </div>
+            )}
+            <div className="flex justify-between text-2xl font-bold mt-2 pt-2 border-t">
+              <span>Total</span>
+              <span className="text-green-600">£{total.toFixed(2)}</span>
+            </div>
+          </div>
+          
+          {/* Action buttons */}
+          <div className="flex gap-3">
+            <button onClick={() => { setShowInvoiceCalc(null); setSelectedBand(null); }} className="flex-1 py-3 bg-gray-200 rounded-lg font-medium">Cancel</button>
+            <button onClick={handleConfirm} disabled={saving} className="flex-1 py-3 bg-green-500 text-white rounded-lg font-bold text-lg disabled:opacity-50">
+              {saving ? '...' : `✓ Confirm £${total.toFixed(2)}`}
+            </button>
           </div>
         </div>
       </div>
@@ -2154,7 +2274,7 @@ const CommandCentre = () => {
       {view === 'reports' && <ReportsView />}
       
       {showProjectSummary && <ProjectSummaryModal project={showProjectSummary} onClose={() => setShowProjectSummary(null)} />}
-      {showInvoiceCalc && <InvoiceModal booking={showInvoiceCalc} onClose={() => setShowInvoiceCalc(null)} />}
+      {showInvoiceCalc && <InvoiceCalcModal />}
     </div>
   );
 };
