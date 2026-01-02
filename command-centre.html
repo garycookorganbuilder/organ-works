@@ -96,6 +96,7 @@ const CommandCentre = () => {
   const [newContactRole, setNewContactRole] = useState('');
   const [newContactPhone, setNewContactPhone] = useState('');
   const [newContactEmail, setNewContactEmail] = useState('');
+  const [newContactIsBooking, setNewContactIsBooking] = useState(false);
   const [bookingType, setBookingType] = useState('OTS');
   const [customQuote, setCustomQuote] = useState('');
   const [jobNotes, setJobNotes] = useState('');
@@ -161,7 +162,11 @@ const CommandCentre = () => {
         customRate: c.customRate ? parseFloat(c.customRate) : null
       }));
       setCustomers(parsedCustomers);
-      setContacts(data.contacts || []);
+      const parsedContacts = (data.contacts || []).map(c => ({
+        ...c,
+        isBookingContact: c.isBookingContact === 'true' || c.isBookingContact === true
+      }));
+      setContacts(parsedContacts);
       setProjects(data.projects || []);
       const normalizedBookings = (data.bookings || []).map(b => ({ ...b, date: b.date ? b.date.split('T')[0] : b.date }));
       setBookings(normalizedBookings);
@@ -208,6 +213,7 @@ const CommandCentre = () => {
   const isWorkDay = (year, month, day) => { const dow = getDayOfWeek(year, month, day); return dow >= 1 && dow <= 5; }; // Mon-Fri
   const getBookingsForDay = (date) => bookings.filter(b => b.date === date);
   const getCustomerById = (id) => customers.find(c => c.id === id);
+  const getBookingContact = (customerId) => contacts.find(c => c.customerId === customerId && c.isBookingContact) || contacts.find(c => c.customerId === customerId);
   const isDayOff = (date) => daysOff.includes(date);
   const formatDate = (dateStr) => { if (!dateStr) return ''; const d = new Date(dateStr); return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); };
   const formatCurrency = (amount) => '£' + (parseFloat(amount) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -907,6 +913,8 @@ const CommandCentre = () => {
                   const dayBookings = getBookingsForDay(dateStr);
                   const hasBooking = dayBookings.length > 0;
                   const firstBookingType = hasBooking ? dayBookings[0].type : null;
+                  const firstBookingStatus = hasBooking ? dayBookings[0].status : null;
+                  const isProvisional = firstBookingStatus === 'scheduled';
                   const color = firstBookingType ? getJobTypeColor(firstBookingType) : null;
                   const isSelecting = selectedCustomerToBook !== null || allocatingProject !== null;
                   const isToday = dateStr === todayStr;
@@ -920,6 +928,9 @@ const CommandCentre = () => {
                   let cellClass = 'text-center border transition-all cursor-pointer relative ';
                   if (!isWork) cellClass += 'bg-gray-100 dim-when-booking';
                   else if (isOff) cellClass += 'bg-yellow-200 dim-when-booking';
+                  else if (isProvisional && color === 'blue') cellClass += 'bg-blue-200 text-blue-800 border-2 border-dashed border-blue-400';
+                  else if (isProvisional && color === 'orange') cellClass += 'bg-orange-200 text-orange-800 border-2 border-dashed border-orange-400';
+                  else if (isProvisional) cellClass += 'bg-gray-200 text-gray-600 border-2 border-dashed border-gray-400';
                   else if (color === 'blue') cellClass += 'bg-blue-500 text-white';
                   else if (color === 'green') cellClass += 'bg-emerald-500 text-white';
                   else if (color === 'purple') cellClass += 'bg-purple-500 text-white';
@@ -936,7 +947,7 @@ const CommandCentre = () => {
                     <td key={dayIdx} onClick={() => handleDayClick(dateStr, monthData.year, monthData.month, day)} className={cellClass}>
                       {isToday && <div className="absolute inset-0 border-2 border-red-500 rounded pointer-events-none"></div>}
                       <div className="w-8 h-8 flex items-center justify-center mx-auto text-sm font-bold">
-                        {hasBooking ? (dayBookings.length > 1 ? dayBookings.length : firstBookingType === 'project' ? 'P' : (firstBookingType === 'OTS' || firstBookingType === 'TSC' || firstBookingType?.startsWith('tuning')) ? 'T' : firstBookingType === 'fault' ? 'F' : 'B') : isWork && !isOff && !isPast ? '·' : ''}
+                        {hasBooking ? (isProvisional ? '?' : dayBookings.length > 1 ? dayBookings.length : firstBookingType === 'project' ? 'P' : (firstBookingType === 'OTS' || firstBookingType === 'TSC' || firstBookingType?.startsWith('tuning')) ? '✓' : firstBookingType === 'fault' ? 'F' : '✓') : isWork && !isOff && !isPast ? '·' : ''}
                       </div>
                     </td>
                   );
@@ -946,14 +957,13 @@ const CommandCentre = () => {
           </tbody>
         </table>
         <div className="flex gap-4 p-4 bg-gray-100 border-t text-sm flex-wrap">
-          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-blue-500 rounded"></div> Tuning</div>
+          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-blue-200 rounded border-2 border-dashed border-blue-400 flex items-center justify-center text-xs">?</div> Provisional</div>
+          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-blue-500 rounded flex items-center justify-center text-white text-xs">✓</div> Confirmed</div>
           <div className="flex items-center gap-2"><div className="w-6 h-6 bg-orange-400 rounded"></div> Fault</div>
           <div className="flex items-center gap-2"><div className="w-6 h-6 bg-pink-400 rounded"></div> Project</div>
-          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-amber-200 rounded border border-amber-400"></div> Reserved (tunings)</div>
-          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-pink-200 rounded border border-pink-400"></div> Planned (projects)</div>
+          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-amber-200 rounded border border-amber-400"></div> Reserved</div>
           <div className="flex items-center gap-2"><div className="w-6 h-6 bg-green-200 rounded border border-green-400"></div> Free</div>
           <div className="flex items-center gap-2"><div className="w-6 h-6 bg-yellow-200 rounded"></div> Day off</div>
-          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-gray-100 rounded"></div> Weekend</div>
           <div className="flex items-center gap-2"><div className="w-6 h-6 bg-white rounded border-2 border-red-500"></div> Today</div>
         </div>
       </div>
@@ -988,14 +998,22 @@ const CommandCentre = () => {
           <div className="space-y-3 mb-4 flex-1 overflow-y-auto min-h-0">
             {dayBookings.map((booking) => {
               const customer = getCustomerById(booking.customerId);
+              const bookingContact = getBookingContact(booking.customerId);
               const color = getJobTypeColor(booking.type);
               const isProject = booking.type === 'project';
+              const isProvisional = booking.status === 'scheduled';
+              const emailSubject = encodeURIComponent(`Organ Tuning - ${customer?.name} - ${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`);
+              
               return (
-                <div key={booking.id} className={`p-4 rounded-lg ${color === 'blue' ? 'bg-blue-100 border-l-4 border-blue-500' : color === 'pink' ? 'bg-pink-100 border-l-4 border-pink-500' : color === 'orange' ? 'bg-orange-100 border-l-4 border-orange-500' : 'bg-gray-100 border-l-4 border-gray-500'}`}>
+                <div key={booking.id} className={`p-4 rounded-lg ${isProvisional ? 'border-2 border-dashed border-gray-400 bg-gray-50' : color === 'blue' ? 'bg-blue-100 border-l-4 border-blue-500' : color === 'pink' ? 'bg-pink-100 border-l-4 border-pink-500' : color === 'orange' ? 'bg-orange-100 border-l-4 border-orange-500' : 'bg-gray-100 border-l-4 border-gray-500'}`}>
                   <div className="flex justify-between items-start">
                     <div>
                       {isProject && <div className="text-sm text-gray-600">{customer?.name}</div>}
-                      <div className="font-bold text-lg">{isProject ? booking.projectName : customer?.name}</div>
+                      <div className="font-bold text-lg flex items-center gap-2">
+                        {isProvisional && <span className="text-gray-400">❓</span>}
+                        {booking.status === 'confirmed' && <span className="text-blue-500">✓</span>}
+                        {isProject ? booking.projectName : customer?.name}
+                      </div>
                       <div className="text-sm text-gray-500 mt-1">{getJobTypeLabel(booking.type)}</div>
                       {booking.notes && !isProject && <div className="text-sm italic mt-1">{booking.notes}</div>}
                     </div>
@@ -1004,9 +1022,32 @@ const CommandCentre = () => {
                       <button onClick={() => removeBooking(date, booking.id)} className="text-red-500 text-sm hover:text-red-700 mt-2">Remove</button>
                     </div>
                   </div>
+                  
+                  {/* Booking Contact for provisional bookings */}
+                  {isProvisional && bookingContact && (
+                    <div className="mt-3 p-3 bg-yellow-50 rounded-lg border border-yellow-300">
+                      <div className="text-sm text-gray-600 mb-1">📞 Contact to confirm:</div>
+                      <div className="font-bold">{bookingContact.isBookingContact && '⭐ '}{bookingContact.name}</div>
+                      {bookingContact.role && <div className="text-sm text-gray-500">{bookingContact.role}</div>}
+                      <div className="flex gap-2 mt-2 flex-wrap">
+                        {bookingContact.phone && (
+                          <a href={`tel:${bookingContact.phone}`} className="bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-1">
+                            📞 {bookingContact.phone}
+                          </a>
+                        )}
+                        {bookingContact.email && (
+                          <a href={`https://mail.google.com/mail/?view=cm&fs=1&to=${bookingContact.email}&su=${emailSubject}`} target="_blank" className="bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-1">
+                            ✉️ Email
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  
                   {!isProject && (
                     <div className="mt-3 pt-2 border-t flex gap-2 flex-wrap">
-                      {booking.status === 'scheduled' && <button onClick={() => updateBookingStatus(booking.id, 'completed')} className="text-sm bg-white px-4 py-2 rounded-lg hover:bg-green-100 touch-target">✓ Done</button>}
+                      {booking.status === 'scheduled' && <button onClick={() => updateBookingStatus(booking.id, 'confirmed')} className="text-sm bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 touch-target">✓ Confirm</button>}
+                      {booking.status === 'confirmed' && <button onClick={() => updateBookingStatus(booking.id, 'completed')} className="text-sm bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 touch-target">✓ Done</button>}
                       {booking.status === 'completed' && <button onClick={() => {
                         const customer = getCustomerById(booking.customerId);
                         const distance = customer?.distance || 0;
@@ -2009,7 +2050,8 @@ const CommandCentre = () => {
           name: newContactName,
           role: newContactRole,
           phone: newContactPhone,
-          email: newContactEmail
+          email: newContactEmail,
+          isBookingContact: newContactIsBooking
         })
       });
       setContacts([...contacts, { 
@@ -2018,13 +2060,15 @@ const CommandCentre = () => {
         name: newContactName, 
         role: newContactRole, 
         phone: newContactPhone, 
-        email: newContactEmail 
+        email: newContactEmail,
+        isBookingContact: newContactIsBooking
       }]);
       setShowAddContact(false);
       setNewContactName('');
       setNewContactRole('');
       setNewContactPhone('');
       setNewContactEmail('');
+      setNewContactIsBooking(false);
     } catch (err) {
       alert('Failed to add contact: ' + err.message);
     } finally {
@@ -2502,9 +2546,13 @@ const CommandCentre = () => {
                     <input type="tel" placeholder="Phone" value={newContactPhone} onChange={(e) => setNewContactPhone(e.target.value)} className="p-3 border-2 rounded-lg" />
                     <input type="email" placeholder="Email" value={newContactEmail} onChange={(e) => setNewContactEmail(e.target.value)} className="p-3 border-2 rounded-lg" />
                   </div>
+                  <label className="flex items-center gap-2 cursor-pointer mt-3">
+                    <input type="checkbox" checked={newContactIsBooking} onChange={(e) => setNewContactIsBooking(e.target.checked)} className="w-5 h-5" />
+                    <span className="font-medium">⭐ Booking Contact</span>
+                  </label>
                   <div className="flex gap-2 mt-3">
                     <button onClick={addContact} disabled={!newContactName} className="bg-green-500 text-white px-6 py-2 rounded-lg disabled:bg-gray-300">Save</button>
-                    <button onClick={() => { setShowAddContact(false); setNewContactName(''); setNewContactRole(''); setNewContactPhone(''); setNewContactEmail(''); }} className="bg-gray-300 px-6 py-2 rounded-lg">Cancel</button>
+                    <button onClick={() => { setShowAddContact(false); setNewContactName(''); setNewContactRole(''); setNewContactPhone(''); setNewContactEmail(''); setNewContactIsBooking(false); }} className="bg-gray-300 px-6 py-2 rounded-lg">Cancel</button>
                   </div>
                 </div>
               )}
@@ -2514,7 +2562,7 @@ const CommandCentre = () => {
               ) : (
                 <div className="grid gap-3">
                   {customerContacts.map(contact => (
-                    <div key={contact.id} className="bg-gray-50 p-4 rounded-lg">
+                    <div key={contact.id} className={`p-4 rounded-lg ${contact.isBookingContact ? 'bg-yellow-50 border-2 border-yellow-400' : 'bg-gray-50'}`}>
                       {editingContact?.id === contact.id ? (
                         <div className="space-y-3">
                           <div className="grid grid-cols-2 gap-3">
@@ -2523,6 +2571,11 @@ const CommandCentre = () => {
                             <input type="tel" value={editingContact.phone || ''} onChange={(e) => setEditingContact({...editingContact, phone: e.target.value})} className="p-2 border-2 rounded" placeholder="Phone" />
                             <input type="email" value={editingContact.email || ''} onChange={(e) => setEditingContact({...editingContact, email: e.target.value})} className="p-2 border-2 rounded" placeholder="Email" />
                           </div>
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" checked={editingContact.isBookingContact || false} onChange={(e) => setEditingContact({...editingContact, isBookingContact: e.target.checked})} className="w-5 h-5" />
+                            <span className="font-medium">⭐ Booking Contact</span>
+                            <span className="text-sm text-gray-500">(shown when confirming bookings)</span>
+                          </label>
                           <div className="flex gap-2">
                             <button onClick={() => saveContact(editingContact)} className="bg-green-500 text-white px-4 py-2 rounded">Save</button>
                             <button onClick={() => setEditingContact(null)} className="bg-gray-300 px-4 py-2 rounded">Cancel</button>
@@ -2532,7 +2585,10 @@ const CommandCentre = () => {
                       ) : (
                         <div className="flex justify-between items-start">
                           <div>
-                            <div className="font-bold text-lg">{contact.name}</div>
+                            <div className="font-bold text-lg">
+                              {contact.isBookingContact && <span className="text-yellow-500 mr-1">⭐</span>}
+                              {contact.name}
+                            </div>
                             {contact.role && <div className="text-blue-600">{contact.role}</div>}
                             <div className="flex gap-4 mt-2">
                               {contact.phone && <a href={`tel:${contact.phone}`} className="text-lg font-bold text-green-600">📞 {contact.phone}</a>}
