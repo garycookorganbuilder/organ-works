@@ -914,7 +914,7 @@ const CommandCentre = () => {
                   const hasBooking = dayBookings.length > 0;
                   const firstBookingType = hasBooking ? dayBookings[0].type : null;
                   const firstBookingStatus = hasBooking ? dayBookings[0].status : null;
-                  const isProvisional = firstBookingStatus === 'scheduled';
+                  const isProvisional = firstBookingStatus === 'scheduled' && firstBookingType !== 'project';
                   const color = firstBookingType ? getJobTypeColor(firstBookingType) : null;
                   const isSelecting = selectedCustomerToBook !== null || allocatingProject !== null;
                   const isToday = dateStr === todayStr;
@@ -1001,7 +1001,7 @@ const CommandCentre = () => {
               const bookingContact = getBookingContact(booking.customerId);
               const color = getJobTypeColor(booking.type);
               const isProject = booking.type === 'project';
-              const isProvisional = booking.status === 'scheduled';
+              const isProvisional = booking.status === 'scheduled' && !isProject;
               const emailSubject = encodeURIComponent(`Organ Tuning - ${customer?.name} - ${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`);
               
               return (
