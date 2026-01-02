@@ -91,6 +91,12 @@ const CommandCentre = () => {
   const [newTicketCustomer, setNewTicketCustomer] = useState('');
   const [newTicketDescription, setNewTicketDescription] = useState('');
   const [customerSearch, setCustomerSearch] = useState('');
+  
+  // Memoize filtered customers for search to prevent re-render issues
+  const filteredCustomersForSearch = useMemo(() => {
+    if (!customerSearch) return [];
+    return customers.filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase())).slice(0, 5);
+  }, [customers, customerSearch]);
   const [plannerSearch, setPlannerSearch] = useState('');
   const [showProjectSummary, setShowProjectSummary] = useState(null);
   const [showCapacityDetails, setShowCapacityDetails] = useState(false);
@@ -116,6 +122,12 @@ const CommandCentre = () => {
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectCustomer, setNewProjectCustomer] = useState(null);
   const [projectCustomerSearch, setProjectCustomerSearch] = useState('');
+  
+  // Memoize filtered customers for project search
+  const filteredCustomersForProject = useMemo(() => {
+    if (!projectCustomerSearch) return [];
+    return customers.filter(c => c.name.toLowerCase().includes(projectCustomerSearch.toLowerCase())).slice(0, 10);
+  }, [customers, projectCustomerSearch]);
   const [newProjectEstDays, setNewProjectEstDays] = useState('');
 
   const currentYear = currentDate.getFullYear();
@@ -908,11 +920,17 @@ const CommandCentre = () => {
       {showAddTicket && (
         <div className="mb-4 pb-4 border-b-2 bg-yellow-50 p-3 rounded-lg">
           <div className="font-bold mb-2">New Request</div>
-          <input type="text" placeholder="Search customer..." value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} className="w-full p-2 border rounded mb-2 text-sm" />
-          {customerSearch && (
+          <input 
+            type="text" 
+            placeholder="Search customer..." 
+            value={customerSearch} 
+            onChange={(e) => setCustomerSearch(e.target.value)} 
+            className="w-full p-2 border rounded mb-2 text-sm" 
+          />
+          {customerSearch && filteredCustomersForSearch.length > 0 && (
             <div className="max-h-32 overflow-y-auto mb-2 bg-white border rounded">
-              {customers.filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase())).slice(0, 5).map(c => (
-                <div key={c.id} onClick={() => { setNewTicketCustomer(c.id); setCustomerSearch(c.name); }} className={`p-2 cursor-pointer hover:bg-blue-50 text-sm ${newTicketCustomer === c.id ? 'bg-blue-100' : ''}`}>{c.name}</div>
+              {filteredCustomersForSearch.map(c => (
+                <div key={c.id} onMouseDown={(e) => e.preventDefault()} onClick={() => { setNewTicketCustomer(c.id); setCustomerSearch(c.name); }} className={`p-2 cursor-pointer hover:bg-blue-50 text-sm ${newTicketCustomer === c.id ? 'bg-blue-100' : ''}`}>{c.name}</div>
               ))}
             </div>
           )}
@@ -938,10 +956,10 @@ const CommandCentre = () => {
           <div className="bg-purple-50 border-2 border-purple-300 rounded-lg p-3 mb-2">
             <div className="relative mb-2">
               <input type="text" placeholder="Search customer..." value={projectCustomerSearch} onChange={(e) => { setProjectCustomerSearch(e.target.value); setNewProjectCustomer(null); }} className="w-full p-2 border rounded" />
-              {projectCustomerSearch && !newProjectCustomer && (
+              {projectCustomerSearch && !newProjectCustomer && filteredCustomersForProject.length > 0 && (
                 <div className="absolute top-full left-0 right-0 bg-white border rounded-b shadow-lg max-h-40 overflow-y-auto z-10">
-                  {customers.filter(c => c.name.toLowerCase().includes(projectCustomerSearch.toLowerCase())).slice(0, 10).map(c => (
-                    <div key={c.id} onClick={() => { setNewProjectCustomer(c); setProjectCustomerSearch(c.name); }} className="p-2 hover:bg-purple-50 cursor-pointer border-b">{c.name}</div>
+                  {filteredCustomersForProject.map(c => (
+                    <div key={c.id} onMouseDown={(e) => e.preventDefault()} onClick={() => { setNewProjectCustomer(c); setProjectCustomerSearch(c.name); }} className="p-2 hover:bg-purple-50 cursor-pointer border-b">{c.name}</div>
                   ))}
                 </div>
               )}
