@@ -152,7 +152,7 @@ const CommandCentre = () => {
       setProjects(data.projects || []);
       const normalizedBookings = (data.bookings || []).map(b => ({ ...b, date: b.date ? b.date.split('T')[0] : b.date }));
       setBookings(normalizedBookings);
-      setDaysOff((data.daysOff || []).map(d => d.date));
+      setDaysOff(data.daysOff || []);
       setTickets(data.tickets || []);
       setPricing(data.pricing || { timeBands: [], distanceBands: [] });
       setMaterialsList(data.materialsList || []);
