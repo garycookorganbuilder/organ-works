@@ -92,7 +92,6 @@ const CommandCentre = () => {
   const [newTicketDescription, setNewTicketDescription] = useState('');
   const [customerSearch, setCustomerSearch] = useState('');
   const [plannerSearch, setPlannerSearch] = useState('');
-  const [showPlannerSearchResults, setShowPlannerSearchResults] = useState(false);
   const [showProjectSummary, setShowProjectSummary] = useState(null);
   const [showCapacityDetails, setShowCapacityDetails] = useState(false);
   
@@ -1161,11 +1160,17 @@ const CommandCentre = () => {
           
           {view === 'planner' && (
             <div className="relative">
-              <input type="text" placeholder="🔍 Search customer..." value={plannerSearch} onChange={(e) => { setPlannerSearch(e.target.value); setShowPlannerSearchResults(e.target.value.length > 0); }} onFocus={() => setShowPlannerSearchResults(plannerSearch.length > 0)} className="w-64 px-4 py-2 border-2 rounded-lg" />
-              {showPlannerSearchResults && plannerSearch && (
+              <input 
+                type="text" 
+                placeholder="🔍 Search customer..." 
+                value={plannerSearch} 
+                onChange={(e) => setPlannerSearch(e.target.value)} 
+                className="w-64 px-4 py-2 border-2 rounded-lg" 
+              />
+              {plannerSearch.length > 0 && (
                 <div className="absolute top-full left-0 right-0 bg-white border-2 rounded-b-lg shadow-lg max-h-64 overflow-y-auto z-50">
                   {customers.filter(c => c.name.toLowerCase().includes(plannerSearch.toLowerCase())).slice(0, 10).map(c => (
-                    <div key={c.id} onClick={() => { setSelectedCustomerToBook(c); setBookingType('OTS'); setPlannerSearch(''); setShowPlannerSearchResults(false); }} className="p-3 hover:bg-blue-50 cursor-pointer border-b">
+                    <div key={c.id} onMouseDown={(e) => e.preventDefault()} onClick={() => { setSelectedCustomerToBook(c); setBookingType('OTS'); setPlannerSearch(''); }} className="p-3 hover:bg-blue-50 cursor-pointer border-b">
                       <div className="font-medium">{c.name}</div>
                     </div>
                   ))}
