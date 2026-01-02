@@ -131,6 +131,7 @@ const CommandCentre = () => {
   const [newProjectEstDays, setNewProjectEstDays] = useState('');
   const [newProjectYearStart, setNewProjectYearStart] = useState(new Date().getFullYear());
   const [newProjectYearEnd, setNewProjectYearEnd] = useState(new Date().getFullYear());
+  const [editingProject, setEditingProject] = useState(null); // For editing existing projects
 
   const currentYear = currentDate.getFullYear();
   const plannerMonths = monthNames.map((name, idx) => ({ name, year: currentYear, month: idx, days: new Date(currentYear, idx + 1, 0).getDate() }));
@@ -631,6 +632,21 @@ const CommandCentre = () => {
     }
   };
 
+  const updateProject = async (projectId, updates) => {
+    setSaving(true);
+    try {
+      await apiCall('updateProject', { data: { id: projectId, ...updates } });
+      setProjects(projects.map(p => p.id === projectId ? { ...p, ...updates } : p));
+      setEditingProject(null);
+      setShowProjectSummary(null);
+      setLastSaved(new Date());
+    } catch (err) {
+      alert('Failed to update project: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const deleteProject = async (projectId) => {
     if (!confirm('Delete this project? All allocated days will also be removed.')) return;
     setSaving(true);
@@ -920,209 +936,89 @@ const CommandCentre = () => {
   };
 
   // ============================================================
-  // LEFT PANEL (Jobs Due)
-  // ============================================================
-  
-  const JobsDuePanel = () => (
-    <div className="w-80 bg-white rounded-lg shadow-xl p-4 flex flex-col h-full no-print">
-      {selectedCustomerToBook && (
-        <div className={`border-2 rounded-lg p-4 mb-3 booking-highlight ${selectedTicketToBook ? 'bg-orange-100 border-orange-500' : 'bg-green-100 border-green-500'}`}>
-          <div className={`font-bold text-lg ${selectedTicketToBook ? 'text-orange-800' : 'text-green-800'}`}>{selectedTicketToBook ? '🔧 Booking Fault:' : '📍 Booking:'}</div>
-          <div className={`font-medium text-lg ${selectedTicketToBook ? 'text-orange-700' : 'text-green-700'}`}>{selectedCustomerToBook.name}</div>
-          {selectedTicketToBook && <div className="text-sm text-orange-600 mt-1">"{selectedTicketToBook.description}"</div>}
-          
-          <div className="grid grid-cols-3 gap-2 mt-3">
-            {[{ type: 'OTS', label: 'OTS', desc: 'With helper' }, { type: 'TSC', label: 'Solo', desc: 'Just me' }, { type: 'WS', label: 'Workshop', desc: 'No travel' }].map(item => (
-              <button key={item.type} onClick={() => setBookingType(item.type)} className={`py-3 rounded-lg text-sm font-medium touch-target ${bookingType === item.type ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}>
-                {item.label}<br/><span className="text-xs opacity-75">{item.desc}</span>
-              </button>
-            ))}
-          </div>
-          
-          <div className="mt-3">
-            <label className="text-sm text-gray-600">Job notes (optional):</label>
-            <input type="text" value={jobNotes} onChange={(e) => setJobNotes(e.target.value)} className="w-full p-3 border rounded-lg text-sm" placeholder="e.g. Fix cipher, service swell" />
-          </div>
-          
-          <div className={`text-lg mt-4 font-bold text-center p-3 rounded-lg ${selectedTicketToBook ? 'text-orange-700 bg-orange-200' : 'text-green-700 bg-green-200'}`}>👆 Now tap a day on the calendar</div>
-          <button onClick={() => { setSelectedCustomerToBook(null); setSelectedTicketToBook(null); setCustomQuote(''); setJobNotes(''); }} className="w-full mt-3 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target">Cancel</button>
-        </div>
-      )}
-      
-      {(tickets.length > 0 || showAddTicket) && (
-        <div className="mb-4 pb-4 border-b-2">
-          <h2 className="text-lg font-bold mb-2">📥 Inbox ({tickets.length})</h2>
-          {tickets.map(ticket => {
-            const customer = getCustomerById(ticket.customerId);
-            const isSelected = selectedTicketToBook?.id === ticket.id;
-            return (
-              <div key={ticket.id} onClick={() => selectTicketToBook(ticket)} className={`p-3 rounded-lg cursor-pointer mb-2 border-2 ${isSelected ? 'bg-orange-100 border-orange-500' : 'bg-red-50 border-red-300 hover:border-orange-400'}`}>
-                <div className="flex justify-between items-start">
-                  <div className="font-bold">{customer?.name || 'Unknown'}</div>
-                  <button onClick={(e) => { e.stopPropagation(); deleteTicket(ticket.id); }} className="text-gray-400 hover:text-red-500 text-sm">✕</button>
-                </div>
-                <div className="text-sm text-gray-700">{ticket.description}</div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-      
-      {showAddTicket && (
-        <div className="mb-4 pb-4 border-b-2 bg-yellow-50 p-3 rounded-lg">
-          <div className="font-bold mb-2">New Request</div>
-          <input 
-            type="text" 
-            placeholder="Search customer..." 
-            value={customerSearch} 
-            onChange={(e) => setCustomerSearch(e.target.value)} 
-            className="w-full p-2 border rounded mb-2 text-sm" 
-          />
-          {customerSearch && filteredCustomersForSearch.length > 0 && (
-            <div className="max-h-32 overflow-y-auto mb-2 bg-white border rounded">
-              {filteredCustomersForSearch.map(c => (
-                <div key={c.id} onMouseDown={(e) => e.preventDefault()} onClick={() => { setNewTicketCustomer(c.id); setCustomerSearch(c.name); }} className={`p-2 cursor-pointer hover:bg-blue-50 text-sm ${newTicketCustomer === c.id ? 'bg-blue-100' : ''}`}>{c.name}</div>
-              ))}
-            </div>
-          )}
-          <input type="text" placeholder="What's the problem?" value={newTicketDescription} onChange={(e) => setNewTicketDescription(e.target.value)} className="w-full p-2 border rounded mb-2 text-sm" />
-          <div className="flex gap-2">
-            <button onClick={addTicket} disabled={!newTicketCustomer || !newTicketDescription} className="flex-1 py-2 bg-green-500 text-white rounded font-medium disabled:opacity-50">Save</button>
-            <button onClick={() => { setShowAddTicket(false); setNewTicketCustomer(''); setNewTicketDescription(''); setCustomerSearch(''); }} className="flex-1 py-2 bg-gray-300 rounded font-medium">Cancel</button>
-          </div>
-        </div>
-      )}
-
-      {!showAddTicket && !selectedCustomerToBook && !allocatingProject && (
-        <button onClick={() => setShowAddTicket(true)} className="w-full py-3 mb-3 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg font-medium touch-target border-2 border-red-300">+ Log Fault / Request</button>
-      )}
-
-      <div className="mb-4">
-        <div className="flex justify-between items-center mb-2">
-          <h2 className="text-lg font-bold">🔧 Big Jobs</h2>
-          {!allocatingProject && <button onClick={() => setShowNewProject(true)} className="text-sm bg-purple-100 hover:bg-purple-200 text-purple-700 px-3 py-1 rounded">+ New</button>}
-        </div>
-        
-        {showNewProject && (
-          <div className="bg-purple-50 border-2 border-purple-300 rounded-lg p-3 mb-2">
-            <div className="relative mb-2">
-              <input type="text" placeholder="Search customer..." value={projectCustomerSearch} onChange={(e) => { setProjectCustomerSearch(e.target.value); setNewProjectCustomer(null); }} className="w-full p-2 border rounded" />
-              {projectCustomerSearch && !newProjectCustomer && filteredCustomersForProject.length > 0 && (
-                <div className="absolute top-full left-0 right-0 bg-white border rounded-b shadow-lg max-h-40 overflow-y-auto z-10">
-                  {filteredCustomersForProject.map(c => (
-                    <div key={c.id} onMouseDown={(e) => e.preventDefault()} onClick={() => { setNewProjectCustomer(c); setProjectCustomerSearch(c.name); }} className="p-2 hover:bg-purple-50 cursor-pointer border-b">{c.name}</div>
-                  ))}
-                </div>
-              )}
-            </div>
-            {newProjectCustomer && (
-              <div className="bg-purple-100 p-2 rounded mb-2 flex justify-between items-center">
-                <span className="font-medium">{newProjectCustomer.name}</span>
-                <button onClick={() => { setNewProjectCustomer(null); setProjectCustomerSearch(''); }} className="text-gray-500">✕</button>
-              </div>
-            )}
-            <input type="text" placeholder="Project name..." value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} className="w-full p-2 border rounded mb-2" />
-            <input type="number" placeholder="Est. days" value={newProjectEstDays} onChange={(e) => setNewProjectEstDays(e.target.value)} className="w-full p-2 border rounded mb-2" />
-            <div className="flex gap-2 mb-2 items-center">
-              <select value={newProjectYearStart} onChange={(e) => { setNewProjectYearStart(parseInt(e.target.value)); if (parseInt(e.target.value) > newProjectYearEnd) setNewProjectYearEnd(parseInt(e.target.value)); }} className="flex-1 p-2 border rounded bg-white">
-                {[currentYear, currentYear + 1, currentYear + 2, currentYear + 3].map(y => (
-                  <option key={y} value={y}>{y}</option>
-                ))}
-              </select>
-              <span className="text-gray-500">→</span>
-              <select value={newProjectYearEnd} onChange={(e) => setNewProjectYearEnd(parseInt(e.target.value))} className="flex-1 p-2 border rounded bg-white">
-                {[currentYear, currentYear + 1, currentYear + 2, currentYear + 3].filter(y => y >= newProjectYearStart).map(y => (
-                  <option key={y} value={y}>{y}</option>
-                ))}
-              </select>
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => { setShowNewProject(false); setNewProjectName(''); setNewProjectCustomer(null); setProjectCustomerSearch(''); setNewProjectEstDays(''); setNewProjectYearStart(currentYear); setNewProjectYearEnd(currentYear); }} className="flex-1 py-2 bg-gray-200 rounded">Cancel</button>
-              <button onClick={createProject} disabled={!newProjectName || !newProjectCustomer} className="flex-1 py-2 bg-purple-500 text-white rounded disabled:opacity-50">Create</button>
-            </div>
-          </div>
-        )}
-        
-        {allocatingProject && (
-          <div className="bg-purple-500 text-white rounded-lg p-3 mb-2">
-            <div className="font-bold">📍 Allocating Days</div>
-            <div className="text-sm opacity-80">{allocatingProject.customerName}</div>
-            <div className="font-medium">{allocatingProject.name}</div>
-            {allocatingProject.estimatedDays && <div className="text-sm mt-1">{bookings.filter(b => b.type === 'project' && b.projectId === allocatingProject.id).length} of {allocatingProject.estimatedDays} days</div>}
-            <div className="text-xs mt-2 opacity-80">Tap days to add/remove</div>
-            <button onClick={() => setAllocatingProject(null)} className="mt-2 w-full py-2 bg-white text-purple-700 rounded font-medium">Done</button>
-          </div>
-        )}
-        
-        {!showNewProject && !allocatingProject && activeProjects.length > 0 && (
-          <div className="space-y-2 max-h-48 overflow-y-auto scroll-panel">
-            {activeProjects.map(project => {
-              const yearStart = project.yearStart || project.targetYear;
-              const yearEnd = project.yearEnd || project.targetYear;
-              const yearLabel = yearStart === yearEnd ? yearStart : `${yearStart}-${yearEnd}`;
-              return (
-                <div key={project.id} onClick={() => setShowProjectSummary(project)} className="bg-purple-50 border-2 border-purple-200 rounded-lg p-3 cursor-pointer hover:border-purple-400">
-                  <div className="flex justify-between items-start">
-                    <div className="text-sm text-gray-600">{project.customerName}</div>
-                    {yearLabel && <span className="text-xs bg-purple-200 text-purple-700 px-2 py-0.5 rounded">{yearLabel}</span>}
-                  </div>
-                  <div className="font-medium">{project.name}</div>
-                  <div className="flex justify-between items-center mt-1">
-                    <span className="text-sm text-purple-600">{project.estimatedDays ? `${project.days.length}/${project.estimatedDays} days` : `${project.days.length} days`}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <h2 className="text-xl font-bold mb-3">📋 Tunings Due</h2>
-      <div className="flex-1 overflow-y-auto space-y-2 scroll-panel">
-        {jobsDue.length === 0 ? (
-          <div className="text-center py-8"><div className="text-5xl mb-3">🎉</div><p className="text-gray-500 text-lg">All caught up!</p></div>
-        ) : (
-          jobsDue.map((item, idx) => (
-            <div key={idx} onClick={() => { setSelectedCustomerToBook(item.customer); setBookingType('OTS'); setCustomQuote(''); setJobNotes(''); }}
-              className={`p-4 rounded-lg cursor-pointer transition-all touch-target ${item.urgent ? 'bg-amber-50 border-2 border-amber-400' : 'bg-gray-50 border-2 border-gray-200'} ${selectedCustomerToBook?.id === item.customer.id ? 'ring-4 ring-green-500' : 'hover:border-blue-400'}`}>
-              <div className="font-bold text-lg">{item.customer.name}</div>
-              <div className="flex justify-between items-center mt-1">
-                <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{item.monthName} {item.urgent && '⚠️'}</span>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-
-      {(stats.needsInvoicing > 0 || stats.awaitingPayment > 0) && (
-        <div className="mt-4 pt-4 border-t space-y-2">
-          {stats.needsInvoicing > 0 && <div className="bg-amber-100 p-3 rounded-lg"><div className="font-bold text-amber-800">📧 {stats.needsInvoicing} need invoicing</div><div className="text-amber-700">£{stats.uninvoicedTotal.toLocaleString()}</div></div>}
-          {stats.awaitingPayment > 0 && <div className="bg-blue-100 p-3 rounded-lg"><div className="font-bold text-blue-800">💷 {stats.awaitingPayment} awaiting payment</div><div className="text-blue-700">£{stats.awaitingTotal.toLocaleString()}</div></div>}
-        </div>
-      )}
-    </div>
-  );
-
-  // ============================================================
   // PROJECT SUMMARY MODAL
   // ============================================================
   
   const ProjectSummaryModal = ({ project, onClose }) => {
     if (!project) return null;
+    
+    const [isEditing, setIsEditing] = useState(false);
+    const [editName, setEditName] = useState(project.name || '');
+    const [editEstDays, setEditEstDays] = useState(project.estimatedDays || '');
+    const [editYearStart, setEditYearStart] = useState(project.yearStart || project.targetYear || currentYear);
+    const [editYearEnd, setEditYearEnd] = useState(project.yearEnd || project.targetYear || currentYear);
+    
     const hourlyRate = 45;
     const labourCost = project.totalHours * hourlyRate;
     const totalCost = labourCost + project.materialsCost;
+    const yearLabel = project.yearStart === project.yearEnd ? project.yearStart : `${project.yearStart || project.targetYear}-${project.yearEnd || project.targetYear}`;
+    
+    const handleSave = () => {
+      updateProject(project.id, {
+        name: editName,
+        estimatedDays: editEstDays ? parseInt(editEstDays) : null,
+        yearStart: editYearStart,
+        yearEnd: editYearEnd >= editYearStart ? editYearEnd : editYearStart
+      });
+    };
     
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
           <div className="flex justify-between items-start mb-4">
-            <div>
+            <div className="flex-1">
               <div className="text-sm text-gray-500">{project.customerName}</div>
-              <h2 className="text-2xl font-bold">{project.name}</h2>
+              {isEditing ? (
+                <input 
+                  type="text" 
+                  value={editName} 
+                  onChange={(e) => setEditName(e.target.value)} 
+                  className="text-2xl font-bold w-full border-2 border-purple-300 rounded px-2 py-1 mt-1"
+                />
+              ) : (
+                <h2 className="text-2xl font-bold">{project.name}</h2>
+              )}
+              {yearLabel && !isEditing && <div className="text-sm text-purple-600 mt-1">📅 {yearLabel}</div>}
             </div>
-            <button onClick={onClose} className="text-2xl text-gray-400 hover:text-gray-600">×</button>
+            <button onClick={onClose} className="text-2xl text-gray-400 hover:text-gray-600 ml-4">×</button>
           </div>
+          
+          {isEditing && (
+            <div className="bg-purple-50 rounded-lg p-4 mb-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm text-gray-600 block mb-1">Estimated Days</label>
+                  <input 
+                    type="number" 
+                    value={editEstDays} 
+                    onChange={(e) => setEditEstDays(e.target.value)} 
+                    className="w-full p-2 border rounded"
+                    placeholder="e.g. 40"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm text-gray-600 block mb-1">Year Range</label>
+                  <div className="flex gap-2 items-center">
+                    <select value={editYearStart} onChange={(e) => { setEditYearStart(parseInt(e.target.value)); if (parseInt(e.target.value) > editYearEnd) setEditYearEnd(parseInt(e.target.value)); }} className="flex-1 p-2 border rounded bg-white">
+                      {[currentYear - 1, currentYear, currentYear + 1, currentYear + 2, currentYear + 3].map(y => (
+                        <option key={y} value={y}>{y}</option>
+                      ))}
+                    </select>
+                    <span className="text-gray-500">→</span>
+                    <select value={editYearEnd} onChange={(e) => setEditYearEnd(parseInt(e.target.value))} className="flex-1 p-2 border rounded bg-white">
+                      {[currentYear - 1, currentYear, currentYear + 1, currentYear + 2, currentYear + 3].filter(y => y >= editYearStart).map(y => (
+                        <option key={y} value={y}>{y}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-2 mt-4">
+                <button onClick={handleSave} className="flex-1 py-2 bg-purple-500 text-white rounded font-medium">💾 Save Changes</button>
+                <button onClick={() => setIsEditing(false)} className="flex-1 py-2 bg-gray-200 rounded font-medium">Cancel</button>
+              </div>
+            </div>
+          )}
           
           <div className="grid grid-cols-3 gap-4 mb-6">
             <div className="bg-purple-100 rounded-lg p-4 text-center">
@@ -1140,8 +1036,9 @@ const CommandCentre = () => {
             </div>
           </div>
           
-          <div className="flex gap-3 pt-4 border-t">
+          <div className="flex gap-3 pt-4 border-t flex-wrap">
             <button onClick={() => { setAllocatingProject(project); onClose(); }} className="flex-1 py-3 bg-purple-500 text-white rounded-lg font-medium">📅 Allocate Days</button>
+            {!isEditing && <button onClick={() => setIsEditing(true)} className="px-6 py-3 bg-purple-100 text-purple-600 rounded-lg font-medium hover:bg-purple-200">✏️ Edit</button>}
             <button onClick={() => deleteProject(project.id)} className="px-6 py-3 bg-red-100 text-red-600 rounded-lg font-medium hover:bg-red-200">🗑️ Delete</button>
             <button onClick={onClose} className="px-6 py-3 bg-gray-200 rounded-lg font-medium">Close</button>
           </div>
@@ -1289,7 +1186,190 @@ const CommandCentre = () => {
       {/* Main Content */}
       {view === 'planner' && (
         <div className="flex gap-3 flex-1">
-          <JobsDuePanel />
+          {/* LEFT PANEL - inlined to prevent re-render focus loss */}
+          <div className="w-80 bg-white rounded-lg shadow-xl p-4 flex flex-col h-full no-print">
+            {selectedCustomerToBook && (
+              <div className={`border-2 rounded-lg p-4 mb-3 booking-highlight ${selectedTicketToBook ? 'bg-orange-100 border-orange-500' : 'bg-green-100 border-green-500'}`}>
+                <div className={`font-bold text-lg ${selectedTicketToBook ? 'text-orange-800' : 'text-green-800'}`}>{selectedTicketToBook ? '🔧 Booking Fault:' : '📍 Booking:'}</div>
+                <div className={`font-medium text-lg ${selectedTicketToBook ? 'text-orange-700' : 'text-green-700'}`}>{selectedCustomerToBook.name}</div>
+                {selectedTicketToBook && <div className="text-sm text-orange-600 mt-1">"{selectedTicketToBook.description}"</div>}
+                
+                <div className="grid grid-cols-3 gap-2 mt-3">
+                  {[{ type: 'OTS', label: 'OTS', desc: 'With helper' }, { type: 'TSC', label: 'Solo', desc: 'Just me' }, { type: 'WS', label: 'Workshop', desc: 'No travel' }].map(item => (
+                    <button key={item.type} onClick={() => setBookingType(item.type)} className={`py-3 rounded-lg text-sm font-medium touch-target ${bookingType === item.type ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}>
+                      {item.label}<br/><span className="text-xs opacity-75">{item.desc}</span>
+                    </button>
+                  ))}
+                </div>
+                
+                <div className="mt-3">
+                  <label className="text-sm text-gray-600">Job notes (optional):</label>
+                  <input type="text" value={jobNotes} onChange={(e) => setJobNotes(e.target.value)} className="w-full p-3 border rounded-lg text-sm" placeholder="e.g. Fix cipher, service swell" />
+                </div>
+                
+                <div className={`text-lg mt-4 font-bold text-center p-3 rounded-lg ${selectedTicketToBook ? 'text-orange-700 bg-orange-200' : 'text-green-700 bg-green-200'}`}>👆 Now tap a day on the calendar</div>
+                <button onClick={() => { setSelectedCustomerToBook(null); setSelectedTicketToBook(null); setCustomQuote(''); setJobNotes(''); }} className="w-full mt-3 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target">Cancel</button>
+              </div>
+            )}
+            
+            {(tickets.length > 0 || showAddTicket) && (
+              <div className="mb-4 pb-4 border-b-2">
+                <h2 className="text-lg font-bold mb-2">📥 Inbox ({tickets.length})</h2>
+                {tickets.map(ticket => {
+                  const customer = getCustomerById(ticket.customerId);
+                  const isSelected = selectedTicketToBook?.id === ticket.id;
+                  return (
+                    <div key={ticket.id} onClick={() => selectTicketToBook(ticket)} className={`p-3 rounded-lg cursor-pointer mb-2 border-2 ${isSelected ? 'bg-orange-100 border-orange-500' : 'bg-red-50 border-red-300 hover:border-orange-400'}`}>
+                      <div className="flex justify-between items-start">
+                        <div className="font-bold">{customer?.name || 'Unknown'}</div>
+                        <button onClick={(e) => { e.stopPropagation(); deleteTicket(ticket.id); }} className="text-gray-400 hover:text-red-500 text-sm">✕</button>
+                      </div>
+                      <div className="text-sm text-gray-700">{ticket.description}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            
+            {showAddTicket && (
+              <div className="mb-4 pb-4 border-b-2 bg-yellow-50 p-3 rounded-lg">
+                <div className="font-bold mb-2">New Request</div>
+                <input 
+                  type="text" 
+                  placeholder="Search customer..." 
+                  value={customerSearch} 
+                  onChange={(e) => setCustomerSearch(e.target.value)} 
+                  className="w-full p-2 border rounded mb-2 text-sm" 
+                />
+                {customerSearch && filteredCustomersForSearch.length > 0 && (
+                  <div className="max-h-32 overflow-y-auto mb-2 bg-white border rounded">
+                    {filteredCustomersForSearch.map(c => (
+                      <div key={c.id} onMouseDown={(e) => e.preventDefault()} onClick={() => { setNewTicketCustomer(c.id); setCustomerSearch(c.name); }} className={`p-2 cursor-pointer hover:bg-blue-50 text-sm ${newTicketCustomer === c.id ? 'bg-blue-100' : ''}`}>{c.name}</div>
+                    ))}
+                  </div>
+                )}
+                <input 
+                  type="text" 
+                  placeholder="What's the problem?" 
+                  value={newTicketDescription} 
+                  onChange={(e) => setNewTicketDescription(e.target.value)} 
+                  className="w-full p-2 border rounded mb-2 text-sm" 
+                />
+                <div className="flex gap-2">
+                  <button onClick={addTicket} disabled={!newTicketCustomer || !newTicketDescription} className="flex-1 py-2 bg-green-500 text-white rounded font-medium disabled:opacity-50">Save</button>
+                  <button onClick={() => { setShowAddTicket(false); setNewTicketCustomer(''); setNewTicketDescription(''); setCustomerSearch(''); }} className="flex-1 py-2 bg-gray-300 rounded font-medium">Cancel</button>
+                </div>
+              </div>
+            )}
+
+            {!showAddTicket && !selectedCustomerToBook && !allocatingProject && (
+              <button onClick={() => setShowAddTicket(true)} className="w-full py-3 mb-3 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg font-medium touch-target border-2 border-red-300">+ Log Fault / Request</button>
+            )}
+
+            <div className="mb-4">
+              <div className="flex justify-between items-center mb-2">
+                <h2 className="text-lg font-bold">🔧 Big Jobs</h2>
+                {!allocatingProject && <button onClick={() => setShowNewProject(true)} className="text-sm bg-purple-100 hover:bg-purple-200 text-purple-700 px-3 py-1 rounded">+ New</button>}
+              </div>
+              
+              {showNewProject && (
+                <div className="bg-purple-50 border-2 border-purple-300 rounded-lg p-3 mb-2">
+                  <div className="relative mb-2">
+                    <input type="text" placeholder="Search customer..." value={projectCustomerSearch} onChange={(e) => { setProjectCustomerSearch(e.target.value); setNewProjectCustomer(null); }} className="w-full p-2 border rounded" />
+                    {projectCustomerSearch && !newProjectCustomer && filteredCustomersForProject.length > 0 && (
+                      <div className="absolute top-full left-0 right-0 bg-white border rounded-b shadow-lg max-h-40 overflow-y-auto z-10">
+                        {filteredCustomersForProject.map(c => (
+                          <div key={c.id} onMouseDown={(e) => e.preventDefault()} onClick={() => { setNewProjectCustomer(c); setProjectCustomerSearch(c.name); }} className="p-2 hover:bg-purple-50 cursor-pointer border-b">{c.name}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {newProjectCustomer && (
+                    <div className="bg-purple-100 p-2 rounded mb-2 flex justify-between items-center">
+                      <span className="font-medium">{newProjectCustomer.name}</span>
+                      <button onClick={() => { setNewProjectCustomer(null); setProjectCustomerSearch(''); }} className="text-gray-500">✕</button>
+                    </div>
+                  )}
+                  <input type="text" placeholder="Project name..." value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} className="w-full p-2 border rounded mb-2" />
+                  <input type="number" placeholder="Est. days" value={newProjectEstDays} onChange={(e) => setNewProjectEstDays(e.target.value)} className="w-full p-2 border rounded mb-2" />
+                  <div className="flex gap-2 mb-2 items-center">
+                    <select value={newProjectYearStart} onChange={(e) => { setNewProjectYearStart(parseInt(e.target.value)); if (parseInt(e.target.value) > newProjectYearEnd) setNewProjectYearEnd(parseInt(e.target.value)); }} className="flex-1 p-2 border rounded bg-white">
+                      {[currentYear, currentYear + 1, currentYear + 2, currentYear + 3].map(y => (
+                        <option key={y} value={y}>{y}</option>
+                      ))}
+                    </select>
+                    <span className="text-gray-500">→</span>
+                    <select value={newProjectYearEnd} onChange={(e) => setNewProjectYearEnd(parseInt(e.target.value))} className="flex-1 p-2 border rounded bg-white">
+                      {[currentYear, currentYear + 1, currentYear + 2, currentYear + 3].filter(y => y >= newProjectYearStart).map(y => (
+                        <option key={y} value={y}>{y}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => { setShowNewProject(false); setNewProjectName(''); setNewProjectCustomer(null); setProjectCustomerSearch(''); setNewProjectEstDays(''); setNewProjectYearStart(currentYear); setNewProjectYearEnd(currentYear); }} className="flex-1 py-2 bg-gray-200 rounded">Cancel</button>
+                    <button onClick={createProject} disabled={!newProjectName || !newProjectCustomer} className="flex-1 py-2 bg-purple-500 text-white rounded disabled:opacity-50">Create</button>
+                  </div>
+                </div>
+              )}
+              
+              {allocatingProject && (
+                <div className="bg-purple-500 text-white rounded-lg p-3 mb-2">
+                  <div className="font-bold">📍 Allocating Days</div>
+                  <div className="text-sm opacity-80">{allocatingProject.customerName}</div>
+                  <div className="font-medium">{allocatingProject.name}</div>
+                  {allocatingProject.estimatedDays && <div className="text-sm mt-1">{bookings.filter(b => b.type === 'project' && b.projectId === allocatingProject.id).length} of {allocatingProject.estimatedDays} days</div>}
+                  <div className="text-xs mt-2 opacity-80">Tap days to add/remove</div>
+                  <button onClick={() => setAllocatingProject(null)} className="mt-2 w-full py-2 bg-white text-purple-700 rounded font-medium">Done</button>
+                </div>
+              )}
+              
+              {!showNewProject && !allocatingProject && activeProjects.length > 0 && (
+                <div className="space-y-2 max-h-48 overflow-y-auto scroll-panel">
+                  {activeProjects.map(project => {
+                    const yearStart = project.yearStart || project.targetYear;
+                    const yearEnd = project.yearEnd || project.targetYear;
+                    const yearLabel = yearStart === yearEnd ? yearStart : `${yearStart}-${yearEnd}`;
+                    return (
+                      <div key={project.id} onClick={() => setShowProjectSummary(project)} className="bg-purple-50 border-2 border-purple-200 rounded-lg p-3 cursor-pointer hover:border-purple-400">
+                        <div className="flex justify-between items-start">
+                          <div className="text-sm text-gray-600">{project.customerName}</div>
+                          {yearLabel && <span className="text-xs bg-purple-200 text-purple-700 px-2 py-0.5 rounded">{yearLabel}</span>}
+                        </div>
+                        <div className="font-medium">{project.name}</div>
+                        <div className="flex justify-between items-center mt-1">
+                          <span className="text-sm text-purple-600">{project.estimatedDays ? `${project.days.length}/${project.estimatedDays} days` : `${project.days.length} days`}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <h2 className="text-xl font-bold mb-3">📋 Tunings Due</h2>
+            <div className="flex-1 overflow-y-auto space-y-2 scroll-panel">
+              {jobsDue.length === 0 ? (
+                <div className="text-center py-8"><div className="text-5xl mb-3">🎉</div><p className="text-gray-500 text-lg">All caught up!</p></div>
+              ) : (
+                jobsDue.map((item, idx) => (
+                  <div key={idx} onClick={() => { setSelectedCustomerToBook(item.customer); setBookingType('OTS'); setCustomQuote(''); setJobNotes(''); }}
+                    className={`p-4 rounded-lg cursor-pointer transition-all touch-target ${item.urgent ? 'bg-amber-50 border-2 border-amber-400' : 'bg-gray-50 border-2 border-gray-200'} ${selectedCustomerToBook?.id === item.customer.id ? 'ring-4 ring-green-500' : 'hover:border-blue-400'}`}>
+                    <div className="font-bold text-lg">{item.customer.name}</div>
+                    <div className="flex justify-between items-center mt-1">
+                      <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{item.monthName} {item.urgent && '⚠️'}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {(stats.needsInvoicing > 0 || stats.awaitingPayment > 0) && (
+              <div className="mt-4 pt-4 border-t space-y-2">
+                {stats.needsInvoicing > 0 && <div className="bg-amber-100 p-3 rounded-lg"><div className="font-bold text-amber-800">📧 {stats.needsInvoicing} need invoicing</div><div className="text-amber-700">£{stats.uninvoicedTotal.toLocaleString()}</div></div>}
+                {stats.awaitingPayment > 0 && <div className="bg-blue-100 p-3 rounded-lg"><div className="font-bold text-blue-800">💷 {stats.awaitingPayment} awaiting payment</div><div className="text-blue-700">£{stats.awaitingTotal.toLocaleString()}</div></div>}
+              </div>
+            )}
+          </div>
           <div className="flex-1 flex flex-col">
             <CapacityBar />
             <YearView />
