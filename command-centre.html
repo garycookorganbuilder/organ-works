@@ -204,6 +204,7 @@ const CommandCentre = () => {
   const capacityData = useMemo(() => {
     const now = new Date();
     const today = getDateString(now.getFullYear(), now.getMonth(), now.getDate());
+    const yearStart = `${currentYear}-01-01`;
     
     // Calculate total tuning visits expected this year
     // Each customer with tuning months = that many visits per year
@@ -260,18 +261,15 @@ const CommandCentre = () => {
         .map(b => b.date)
     );
     
-    // Unbooked available days
+    // Unbooked available days (full year from Jan 1st)
     const unbookedDays = availableWorkdays.filter(d => !bookedDates.has(d));
     
-    // Future unbooked days (from today onwards)
-    const futureUnbookedDays = unbookedDays.filter(d => d >= today);
-    
-    // Days truly free for projects = unbooked - reserved for tunings
-    const daysFreeForProjects = Math.max(0, futureUnbookedDays.length - daysNeededForTunings);
+    // Days truly free for projects = unbooked - reserved for tunings (full year calculation)
+    const daysFreeForProjects = Math.max(0, unbookedDays.length - daysNeededForTunings);
     
     // Is overcommitted?
-    const isOvercommitted = daysNeededForTunings > futureUnbookedDays.length;
-    const overcommittedBy = isOvercommitted ? daysNeededForTunings - futureUnbookedDays.length : 0;
+    const isOvercommitted = daysNeededForTunings > unbookedDays.length;
+    const overcommittedBy = isOvercommitted ? daysNeededForTunings - unbookedDays.length : 0;
     
     // Project days already booked
     const projectDaysBooked = bookings.filter(b => {
@@ -281,8 +279,9 @@ const CommandCentre = () => {
     }).length;
     
     // For coloring the calendar, determine which unbooked days are "reserved" vs "free"
-    // We'll mark the LAST N unbooked days as reserved (filling from end of year backwards)
-    // This way, free days appear at the start
+    // We'll mark the LAST N unbooked FUTURE days as reserved (filling from end of year backwards)
+    // This way, free days appear at the start of the remaining year
+    const futureUnbookedDays = unbookedDays.filter(d => d >= today);
     const reservedDays = new Set();
     const sortedFutureUnbooked = [...futureUnbookedDays].sort((a, b) => b.localeCompare(a)); // Latest first
     for (let i = 0; i < Math.min(daysNeededForTunings, sortedFutureUnbooked.length); i++) {
@@ -298,13 +297,14 @@ const CommandCentre = () => {
       daysOffCount: daysOffThisYear.length,
       availableDays: availableWorkdays.length,
       bookedDays: bookedDates.size,
-      unbookedDays: unbookedDays.length,
-      futureUnbookedDays: futureUnbookedDays.length,
+      unbookedDaysCount: unbookedDays.length,
+      futureUnbookedCount: futureUnbookedDays.length,
       daysFreeForProjects,
       isOvercommitted,
       overcommittedBy,
       projectDaysBooked,
-      reservedDays, // Set of date strings that are "reserved" for tunings
+      reservedDays, // Set of date strings that are "reserved" for tunings (future only)
+      today, // For reference
       // Percentages for the bar
       percentBooked: Math.round((bookedDates.size / availableWorkdays.length) * 100),
       percentReserved: Math.round((daysNeededForTunings / availableWorkdays.length) * 100),
@@ -320,8 +320,8 @@ const CommandCentre = () => {
     const { 
       totalWorkdays, daysOffCount, availableDays, bookedDays, 
       daysNeededForTunings, daysFreeForProjects, isOvercommitted, overcommittedBy,
-      totalTuningsExpected, tuningsBookedThisYear, tuningsRemaining, futureUnbookedDays,
-      projectDaysBooked
+      totalTuningsExpected, tuningsBookedThisYear, tuningsRemaining, unbookedDaysCount,
+      futureUnbookedCount, projectDaysBooked
     } = capacityData;
     
     // Calculate bar segments
@@ -376,7 +376,7 @@ const CommandCentre = () => {
             <div className="bg-gray-50 p-3 rounded">
               <div className="text-gray-500">Total workdays</div>
               <div className="text-2xl font-bold">{totalWorkdays}</div>
-              <div className="text-xs text-gray-400">Mon-Wed</div>
+              <div className="text-xs text-gray-400">Mon-Wed all year</div>
             </div>
             <div className="bg-gray-50 p-3 rounded">
               <div className="text-gray-500">Days off</div>
@@ -385,11 +385,11 @@ const CommandCentre = () => {
             <div className="bg-gray-50 p-3 rounded">
               <div className="text-gray-500">Available</div>
               <div className="text-2xl font-bold">{availableDays}</div>
+              <div className="text-xs text-gray-400">workdays − off</div>
             </div>
             <div className="bg-gray-50 p-3 rounded">
-              <div className="text-gray-500">Remaining</div>
-              <div className="text-2xl font-bold">{futureUnbookedDays}</div>
-              <div className="text-xs text-gray-400">from today</div>
+              <div className="text-gray-500">Booked</div>
+              <div className="text-2xl font-bold">{bookedDays}</div>
             </div>
             <div className="bg-blue-50 p-3 rounded">
               <div className="text-blue-600">Tunings expected</div>
@@ -409,7 +409,7 @@ const CommandCentre = () => {
             <div className={`p-3 rounded ${daysFreeForProjects > 20 ? 'bg-green-50' : daysFreeForProjects > 0 ? 'bg-amber-50' : 'bg-red-50'}`}>
               <div className={daysFreeForProjects > 20 ? 'text-green-600' : daysFreeForProjects > 0 ? 'text-amber-600' : 'text-red-600'}>Free for projects</div>
               <div className={`text-2xl font-bold ${daysFreeForProjects > 20 ? 'text-green-700' : daysFreeForProjects > 0 ? 'text-amber-700' : 'text-red-700'}`}>{daysFreeForProjects}</div>
-              <div className="text-xs text-gray-500">days available</div>
+              <div className="text-xs text-gray-500">{unbookedDaysCount} unbooked − {daysNeededForTunings} tunings</div>
             </div>
           </div>
         )}
