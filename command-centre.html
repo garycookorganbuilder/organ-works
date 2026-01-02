@@ -722,7 +722,7 @@ const CommandCentre = () => {
     }
   };
 
-  const handleDayClick = (dateStr, year, month, day) => {
+  const handleDayClick = async (dateStr, year, month, day) => {
     if (!isWorkDay(year, month, day)) return; // Weekends - never clickable
     
     // If it's a day off and we're not trying to book something, allow toggling it
