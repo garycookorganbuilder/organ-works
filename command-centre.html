@@ -129,6 +129,8 @@ const CommandCentre = () => {
     return customers.filter(c => c.name.toLowerCase().includes(projectCustomerSearch.toLowerCase())).slice(0, 10);
   }, [customers, projectCustomerSearch]);
   const [newProjectEstDays, setNewProjectEstDays] = useState('');
+  const [newProjectYearStart, setNewProjectYearStart] = useState(new Date().getFullYear());
+  const [newProjectYearEnd, setNewProjectYearEnd] = useState(new Date().getFullYear());
 
   const currentYear = currentDate.getFullYear();
   const plannerMonths = monthNames.map((name, idx) => ({ name, year: currentYear, month: idx, days: new Date(currentYear, idx + 1, 0).getDate() }));
@@ -286,15 +288,37 @@ const CommandCentre = () => {
     // Booked days (unique dates with bookings)
     const bookedDates = new Set(yearBookings.map(b => b.date));
     
+    // Calculate planned project days for this year
+    // Projects spanning this year, with days split across years
+    let plannedProjectDays = 0;
+    projects.filter(p => p.status === 'active').forEach(p => {
+      // Support both old targetYear and new yearStart/yearEnd format
+      const yearStart = parseInt(p.yearStart) || parseInt(p.targetYear) || currentYear;
+      const yearEnd = parseInt(p.yearEnd) || parseInt(p.targetYear) || currentYear;
+      
+      // Check if this year falls within the project's range
+      if (currentYear >= yearStart && currentYear <= yearEnd) {
+        const estimatedDays = parseInt(p.estimatedDays) || 0;
+        const yearsSpanned = yearEnd - yearStart + 1;
+        // Split days evenly across years
+        const daysThisYear = Math.ceil(estimatedDays / yearsSpanned);
+        // Count how many days are already booked for this project THIS year
+        const bookedForProjectThisYear = yearBookings.filter(b => b.projectId === p.id).length;
+        // Remaining planned days = allocated for this year - already booked this year
+        plannedProjectDays += Math.max(0, daysThisYear - bookedForProjectThisYear);
+      }
+    });
+    
     // Unbooked available days (full year from Jan 1st)
     const unbookedDays = availableWorkdays.filter(d => !bookedDates.has(d));
     
-    // Days truly free for projects = unbooked - reserved for tunings (full year calculation)
-    const daysFreeForProjects = Math.max(0, unbookedDays.length - daysNeededForTunings);
+    // Days truly free = unbooked - reserved for tunings - planned projects
+    const daysFreeForProjects = Math.max(0, unbookedDays.length - daysNeededForTunings - plannedProjectDays);
     
     // Is overcommitted?
-    const isOvercommitted = daysNeededForTunings > unbookedDays.length;
-    const overcommittedBy = isOvercommitted ? daysNeededForTunings - unbookedDays.length : 0;
+    const totalCommitted = daysNeededForTunings + plannedProjectDays;
+    const isOvercommitted = totalCommitted > unbookedDays.length;
+    const overcommittedBy = isOvercommitted ? totalCommitted - unbookedDays.length : 0;
     
     // For coloring the calendar, determine which unbooked days are "reserved" vs "free"
     // Reserved days fill from START of year forwards (January first)
@@ -302,9 +326,16 @@ const CommandCentre = () => {
     // As tunings get booked, they lock in place and reserved block shrinks
     const futureUnbookedDays = unbookedDays.filter(d => d >= today);
     const reservedDays = new Set();
+    const plannedDays = new Set();
     const sortedFutureUnbooked = [...futureUnbookedDays].sort((a, b) => a.localeCompare(b)); // Earliest first
+    
+    // First mark tuning reserved days
     for (let i = 0; i < Math.min(daysNeededForTunings, sortedFutureUnbooked.length); i++) {
       reservedDays.add(sortedFutureUnbooked[i]);
+    }
+    // Then mark planned project days (after tuning days)
+    for (let i = daysNeededForTunings; i < Math.min(daysNeededForTunings + plannedProjectDays, sortedFutureUnbooked.length); i++) {
+      plannedDays.add(sortedFutureUnbooked[i]);
     }
     
     return {
@@ -319,15 +350,17 @@ const CommandCentre = () => {
       tuningDaysBooked: tuningDays.size,
       faultDaysBooked: faultDays.size,
       projectDaysBooked: projectDays.size,
+      plannedProjectDays,
       unbookedDaysCount: unbookedDays.length,
       futureUnbookedCount: futureUnbookedDays.length,
       daysFreeForProjects,
       isOvercommitted,
       overcommittedBy,
       reservedDays, // Set of date strings that are "reserved" for tunings (future only)
+      plannedDays, // Set of date strings for planned project days
       today, // For reference
     };
-  }, [customers, bookings, daysOff, currentYear]);
+  }, [customers, bookings, daysOff, projects, currentYear]);
 
   // ============================================================
   // CAPACITY BAR COMPONENT
@@ -338,7 +371,7 @@ const CommandCentre = () => {
       totalWorkdays, daysOffCount, availableDays, bookedDays, 
       daysNeededForTunings, daysFreeForProjects, isOvercommitted, overcommittedBy,
       totalTuningsExpected, tuningsBookedThisYear, tuningsRemaining, unbookedDaysCount,
-      tuningDaysBooked, faultDaysBooked, projectDaysBooked
+      tuningDaysBooked, faultDaysBooked, projectDaysBooked, plannedProjectDays
     } = capacityData;
     
     // Calculate bar segments - matching calendar colours
@@ -347,7 +380,8 @@ const CommandCentre = () => {
     const faultWidth = (faultDaysBooked / barTotal) * 100;
     const projectWidth = (projectDaysBooked / barTotal) * 100;
     const reservedWidth = Math.min((daysNeededForTunings / barTotal) * 100, 100 - tuningWidth - faultWidth - projectWidth);
-    const freeWidth = Math.max(0, 100 - tuningWidth - faultWidth - projectWidth - reservedWidth);
+    const plannedWidth = Math.min((plannedProjectDays / barTotal) * 100, 100 - tuningWidth - faultWidth - projectWidth - reservedWidth);
+    const freeWidth = Math.max(0, 100 - tuningWidth - faultWidth - projectWidth - reservedWidth - plannedWidth);
     
     return (
       <div className="bg-white rounded-lg shadow p-4 mb-3">
@@ -365,9 +399,10 @@ const CommandCentre = () => {
         <div className="capacity-bar bg-gray-200 mb-2">
           {tuningDaysBooked > 0 && <div className="capacity-segment bg-blue-500" style={{ width: `${tuningWidth}%` }} title={`Tunings: ${tuningDaysBooked} days`}></div>}
           {faultDaysBooked > 0 && <div className="capacity-segment bg-orange-400" style={{ width: `${faultWidth}%` }} title={`Faults: ${faultDaysBooked} days`}></div>}
-          {projectDaysBooked > 0 && <div className="capacity-segment bg-pink-400" style={{ width: `${projectWidth}%` }} title={`Projects: ${projectDaysBooked} days`}></div>}
+          {projectDaysBooked > 0 && <div className="capacity-segment bg-pink-400" style={{ width: `${projectWidth}%` }} title={`Projects booked: ${projectDaysBooked} days`}></div>}
           <div className="capacity-segment bg-amber-200 border-y border-amber-300" style={{ width: `${reservedWidth}%` }} title={`Reserved for tunings: ${daysNeededForTunings} days`}></div>
-          <div className="capacity-segment bg-green-200 border-y border-green-300" style={{ width: `${freeWidth}%` }} title={`Free for projects: ${daysFreeForProjects} days`}></div>
+          {plannedProjectDays > 0 && <div className="capacity-segment bg-pink-200 border-y border-pink-300" style={{ width: `${plannedWidth}%` }} title={`Planned projects: ${plannedProjectDays} days`}></div>}
+          <div className="capacity-segment bg-green-200 border-y border-green-300" style={{ width: `${freeWidth}%` }} title={`Free: ${daysFreeForProjects} days`}></div>
         </div>
         
         {/* Legend and key numbers - matching calendar colours */}
@@ -394,6 +429,12 @@ const CommandCentre = () => {
             <div className="w-4 h-4 bg-amber-200 border border-amber-300 rounded"></div>
             <span>Reserved: <strong>{daysNeededForTunings}</strong></span>
           </div>
+          {plannedProjectDays > 0 && (
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 bg-pink-200 border border-pink-300 rounded"></div>
+              <span>Planned: <strong>{plannedProjectDays}</strong></span>
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 bg-green-200 border border-green-300 rounded"></div>
             <span>Free: <strong className={daysFreeForProjects > 20 ? 'text-green-600' : daysFreeForProjects > 0 ? 'text-amber-600' : 'text-red-600'}>{daysFreeForProjects}</strong></span>
@@ -566,15 +607,22 @@ const CommandCentre = () => {
     if (!newProjectName || !newProjectCustomer) return;
     setSaving(true);
     try {
-      const result = await apiCall('addProject', { data: { customerId: newProjectCustomer.id, name: newProjectName, estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : '', status: 'active' } });
-      const newProject = { id: result.id, name: newProjectName, customerId: newProjectCustomer.id, customerName: newProjectCustomer.name, estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : null, status: 'active', days: [] };
+      const yearStart = newProjectYearStart;
+      const yearEnd = newProjectYearEnd >= newProjectYearStart ? newProjectYearEnd : newProjectYearStart;
+      const result = await apiCall('addProject', { data: { customerId: newProjectCustomer.id, name: newProjectName, estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : '', yearStart, yearEnd, status: 'active' } });
+      const newProject = { id: result.id, name: newProjectName, customerId: newProjectCustomer.id, customerName: newProjectCustomer.name, estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : null, yearStart, yearEnd, status: 'active', days: [] };
       setProjects([...projects, newProject]);
-      setAllocatingProject(newProject);
+      // Only start allocating if project includes current year
+      if (currentYear >= yearStart && currentYear <= yearEnd) {
+        setAllocatingProject(newProject);
+      }
       setShowNewProject(false);
       setNewProjectName('');
       setNewProjectCustomer(null);
       setProjectCustomerSearch('');
       setNewProjectEstDays('');
+      setNewProjectYearStart(currentYear);
+      setNewProjectYearEnd(currentYear);
       setLastSaved(new Date());
     } catch (err) {
       alert('Failed to create project: ' + err.message);
@@ -762,7 +810,8 @@ const CommandCentre = () => {
                   
                   // Capacity coloring for unbooked workdays
                   const isReservedForTuning = !hasBooking && isWork && !isOff && !isPast && capacityData.reservedDays.has(dateStr);
-                  const isFreeForProjects = !hasBooking && isWork && !isOff && !isPast && !capacityData.reservedDays.has(dateStr);
+                  const isPlannedForProject = !hasBooking && isWork && !isOff && !isPast && capacityData.plannedDays.has(dateStr);
+                  const isFreeForProjects = !hasBooking && isWork && !isOff && !isPast && !capacityData.reservedDays.has(dateStr) && !capacityData.plannedDays.has(dateStr);
 
                   let cellClass = 'text-center border transition-all cursor-pointer relative ';
                   if (!isWork) cellClass += 'bg-gray-100 dim-when-booking';
@@ -775,6 +824,7 @@ const CommandCentre = () => {
                   else if (color === 'red') cellClass += 'bg-red-500 text-white';
                   else if (isPast && isWork) cellClass += 'bg-gray-50 text-gray-300';
                   else if (isReservedForTuning) cellClass += isSelecting ? 'bg-amber-300 hover:bg-amber-400' : 'bg-amber-200 hover:bg-amber-300';
+                  else if (isPlannedForProject) cellClass += isSelecting ? 'bg-pink-300 hover:bg-pink-400' : 'bg-pink-200 hover:bg-pink-300';
                   else if (isFreeForProjects) cellClass += isSelecting ? 'bg-green-300 hover:bg-green-400' : 'bg-green-200 hover:bg-green-300';
                   else cellClass += 'bg-green-50 hover:bg-green-100';
 
@@ -796,7 +846,8 @@ const CommandCentre = () => {
           <div className="flex items-center gap-2"><div className="w-6 h-6 bg-orange-400 rounded"></div> Fault</div>
           <div className="flex items-center gap-2"><div className="w-6 h-6 bg-pink-400 rounded"></div> Project</div>
           <div className="flex items-center gap-2"><div className="w-6 h-6 bg-amber-200 rounded border border-amber-400"></div> Reserved (tunings)</div>
-          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-green-200 rounded border border-green-400"></div> Free (projects)</div>
+          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-pink-200 rounded border border-pink-400"></div> Planned (projects)</div>
+          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-green-200 rounded border border-green-400"></div> Free</div>
           <div className="flex items-center gap-2"><div className="w-6 h-6 bg-yellow-200 rounded"></div> Day off</div>
           <div className="flex items-center gap-2"><div className="w-6 h-6 bg-gray-100 rounded"></div> Weekend</div>
           <div className="flex items-center gap-2"><div className="w-6 h-6 bg-white rounded border-2 border-red-500"></div> Today</div>
@@ -971,10 +1022,23 @@ const CommandCentre = () => {
               </div>
             )}
             <input type="text" placeholder="Project name..." value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} className="w-full p-2 border rounded mb-2" />
-            <input type="number" placeholder="Estimated days (optional)" value={newProjectEstDays} onChange={(e) => setNewProjectEstDays(e.target.value)} className="w-full p-2 border rounded mb-2" />
+            <input type="number" placeholder="Est. days" value={newProjectEstDays} onChange={(e) => setNewProjectEstDays(e.target.value)} className="w-full p-2 border rounded mb-2" />
+            <div className="flex gap-2 mb-2 items-center">
+              <select value={newProjectYearStart} onChange={(e) => { setNewProjectYearStart(parseInt(e.target.value)); if (parseInt(e.target.value) > newProjectYearEnd) setNewProjectYearEnd(parseInt(e.target.value)); }} className="flex-1 p-2 border rounded bg-white">
+                {[currentYear, currentYear + 1, currentYear + 2, currentYear + 3].map(y => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+              <span className="text-gray-500">→</span>
+              <select value={newProjectYearEnd} onChange={(e) => setNewProjectYearEnd(parseInt(e.target.value))} className="flex-1 p-2 border rounded bg-white">
+                {[currentYear, currentYear + 1, currentYear + 2, currentYear + 3].filter(y => y >= newProjectYearStart).map(y => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </div>
             <div className="flex gap-2">
-              <button onClick={() => { setShowNewProject(false); setNewProjectName(''); setNewProjectCustomer(null); setProjectCustomerSearch(''); setNewProjectEstDays(''); }} className="flex-1 py-2 bg-gray-200 rounded">Cancel</button>
-              <button onClick={createProject} disabled={!newProjectName || !newProjectCustomer} className="flex-1 py-2 bg-purple-500 text-white rounded disabled:opacity-50">Start Allocating</button>
+              <button onClick={() => { setShowNewProject(false); setNewProjectName(''); setNewProjectCustomer(null); setProjectCustomerSearch(''); setNewProjectEstDays(''); setNewProjectYearStart(currentYear); setNewProjectYearEnd(currentYear); }} className="flex-1 py-2 bg-gray-200 rounded">Cancel</button>
+              <button onClick={createProject} disabled={!newProjectName || !newProjectCustomer} className="flex-1 py-2 bg-purple-500 text-white rounded disabled:opacity-50">Create</button>
             </div>
           </div>
         )}
@@ -992,15 +1056,23 @@ const CommandCentre = () => {
         
         {!showNewProject && !allocatingProject && activeProjects.length > 0 && (
           <div className="space-y-2 max-h-48 overflow-y-auto scroll-panel">
-            {activeProjects.map(project => (
-              <div key={project.id} onClick={() => setShowProjectSummary(project)} className="bg-purple-50 border-2 border-purple-200 rounded-lg p-3 cursor-pointer hover:border-purple-400">
-                <div className="text-sm text-gray-600">{project.customerName}</div>
-                <div className="font-medium">{project.name}</div>
-                <div className="flex justify-between items-center mt-1">
-                  <span className="text-sm text-purple-600">{project.estimatedDays ? `${project.days.length}/${project.estimatedDays} days` : `${project.days.length} days`}</span>
+            {activeProjects.map(project => {
+              const yearStart = project.yearStart || project.targetYear;
+              const yearEnd = project.yearEnd || project.targetYear;
+              const yearLabel = yearStart === yearEnd ? yearStart : `${yearStart}-${yearEnd}`;
+              return (
+                <div key={project.id} onClick={() => setShowProjectSummary(project)} className="bg-purple-50 border-2 border-purple-200 rounded-lg p-3 cursor-pointer hover:border-purple-400">
+                  <div className="flex justify-between items-start">
+                    <div className="text-sm text-gray-600">{project.customerName}</div>
+                    {yearLabel && <span className="text-xs bg-purple-200 text-purple-700 px-2 py-0.5 rounded">{yearLabel}</span>}
+                  </div>
+                  <div className="font-medium">{project.name}</div>
+                  <div className="flex justify-between items-center mt-1">
+                    <span className="text-sm text-purple-600">{project.estimatedDays ? `${project.days.length}/${project.estimatedDays} days` : `${project.days.length} days`}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
