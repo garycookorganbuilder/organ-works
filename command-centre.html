@@ -175,6 +175,7 @@ const CommandCentre = () => {
       const normalizedBookings = (data.bookings || []).map(b => ({ ...b, date: b.date ? b.date.split('T')[0] : b.date }));
       setBookings(normalizedBookings);
       setDaysOff(data.daysOff || []);
+      console.log('Loaded daysOff:', data.daysOff);
       setTickets(data.tickets || []);
       setPricing(data.pricing || { timeBands: [], distanceBands: [] });
       setMaterialsList(data.materialsList || []);
@@ -223,7 +224,10 @@ const CommandCentre = () => {
   const getBookingsForDay = (date) => bookings.filter(b => b.date === date);
   const getCustomerById = (id) => customers.find(c => c.id === id);
   const getBookingContact = (customerId) => contacts.find(c => c.customerId === customerId && c.isBookingContact) || contacts.find(c => c.customerId === customerId);
-  const isDayOff = (date) => daysOff.some(d => d.date === date || d === date);
+  const isDayOff = (date) => {
+    const result = daysOff.some(d => d.date === date || d === date);
+    return result;
+  };
   const getDayOffReason = (date) => { const dayOff = daysOff.find(d => d.date === date); return dayOff?.reason || ''; };
   const formatDate = (dateStr) => { 
     if (!dateStr) return ''; 
@@ -324,9 +328,10 @@ const CommandCentre = () => {
     
     // Days off this year
     const daysOffThisYear = daysOff.filter(d => d && d.date && parseInt(d.date.split('-')[0]) === currentYear);
+    const daysOffDatesThisYear = daysOffThisYear.map(d => d.date);
     
     // Available workdays (minus days off)
-    const availableWorkdays = allWorkdays.filter(d => !daysOffThisYear.includes(d));
+    const availableWorkdays = allWorkdays.filter(d => !daysOffDatesThisYear.includes(d));
     
     // Count bookings by type for this year
     const yearBookings = bookings.filter(b => b.date && parseInt(b.date.split('-')[0]) === currentYear);
@@ -649,11 +654,16 @@ const CommandCentre = () => {
 
   const toggleDayOff = async (date, reason = '') => {
     const wasOff = isDayOff(date);
+    console.log('toggleDayOff:', { date, wasOff, daysOff });
     setSaving(true);
     try {
       if (wasOff) {
         await apiCall('removeDayOff', { date });
-        setDaysOff(prev => prev.filter(d => d.date !== date && d !== date));
+        setDaysOff(prev => {
+          const filtered = prev.filter(d => d.date !== date && d !== date);
+          console.log('After filter:', filtered);
+          return filtered;
+        });
       } else {
         await apiCall('addDayOff', { data: { date, reason } });
         setDaysOff(prev => [...prev, { date, reason }]);
