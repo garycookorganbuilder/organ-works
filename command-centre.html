@@ -648,14 +648,15 @@ const CommandCentre = () => {
   };
 
   const toggleDayOff = async (date, reason = '') => {
+    const wasOff = isDayOff(date);
     setSaving(true);
     try {
-      if (isDayOff(date)) {
+      if (wasOff) {
         await apiCall('removeDayOff', { date });
-        setDaysOff(daysOff.filter(d => d.date !== date && d !== date));
+        setDaysOff(prev => prev.filter(d => d.date !== date && d !== date));
       } else {
         await apiCall('addDayOff', { data: { date, reason } });
-        setDaysOff([...daysOff, { date, reason }]);
+        setDaysOff(prev => [...prev, { date, reason }]);
       }
       setLastSaved(new Date());
     } catch (err) {
@@ -669,7 +670,7 @@ const CommandCentre = () => {
     setSaving(true);
     try {
       await apiCall('updateDayOff', { data: { date, reason } });
-      setDaysOff(daysOff.map(d => d.date === date ? { ...d, reason } : d));
+      setDaysOff(prev => prev.map(d => d.date === date ? { ...d, reason } : d));
       setLastSaved(new Date());
     } catch (err) {
       alert('Failed to update reason: ' + err.message);
