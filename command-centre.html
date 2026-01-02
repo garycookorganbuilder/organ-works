@@ -90,6 +90,12 @@ const CommandCentre = () => {
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [tuningGroupSearch, setTuningGroupSearch] = useState('');
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
+  const [editingContact, setEditingContact] = useState(null);
+  const [showAddContact, setShowAddContact] = useState(false);
+  const [newContactName, setNewContactName] = useState('');
+  const [newContactRole, setNewContactRole] = useState('');
+  const [newContactPhone, setNewContactPhone] = useState('');
+  const [newContactEmail, setNewContactEmail] = useState('');
   const [bookingType, setBookingType] = useState('OTS');
   const [customQuote, setCustomQuote] = useState('');
   const [jobNotes, setJobNotes] = useState('');
@@ -1977,121 +1983,64 @@ const CommandCentre = () => {
     await updateCustomer(updated);
   };
 
-  const CustomerDetailView = () => {
-    if (!editingCustomer) return null;
-    const customerContacts = contacts.filter(c => c.customerId === editingCustomer.id);
-    const history = getCustomerHistory(editingCustomer.id);
+  // Contact management
+  const addContact = async () => {
+    if (!editingCustomer || !newContactName) return;
+    setSaving(true);
+    try {
+      const result = await apiCall('addContact', { 
+        data: JSON.stringify({
+          customerId: editingCustomer.id,
+          name: newContactName,
+          role: newContactRole,
+          phone: newContactPhone,
+          email: newContactEmail
+        })
+      });
+      setContacts([...contacts, { 
+        id: result.id, 
+        customerId: editingCustomer.id, 
+        name: newContactName, 
+        role: newContactRole, 
+        phone: newContactPhone, 
+        email: newContactEmail 
+      }]);
+      setShowAddContact(false);
+      setNewContactName('');
+      setNewContactRole('');
+      setNewContactPhone('');
+      setNewContactEmail('');
+    } catch (err) {
+      alert('Failed to add contact: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
-    return (
-      <div className="bg-white rounded-lg shadow-xl p-6 max-w-4xl mx-auto">
-        <div className="flex justify-between items-start mb-6">
-          <h2 className="text-3xl font-bold">{editingCustomer.name}</h2>
-          <button onClick={() => setView('customers')} className="bg-gray-300 px-6 py-3 rounded-lg text-xl touch-target">← Back</button>
-        </div>
-        
-        {customerContacts.length > 0 && (
-          <div className="mb-6">
-            <h3 className="font-bold text-xl mb-3">👥 Contacts</h3>
-            <div className="grid grid-cols-2 gap-4">
-              {customerContacts.map(contact => (
-                <div key={contact.id} className="bg-gray-50 p-4 rounded-lg">
-                  <div className="font-bold">{contact.name}</div>
-                  <div className="text-blue-600 text-sm">{contact.role}</div>
-                  {contact.phone && <div className="text-lg font-bold text-blue-600 mt-1">📞 {contact.phone}</div>}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+  const saveContact = async (contact) => {
+    setSaving(true);
+    try {
+      await apiCall('updateContact', { data: JSON.stringify(contact) });
+      setContacts(contacts.map(c => c.id === contact.id ? contact : c));
+      setEditingContact(null);
+    } catch (err) {
+      alert('Failed to save contact: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
-        <div className="border-t-2 pt-4 mb-6">
-          <h3 className="font-bold text-xl mb-3">🔗 Tuning Group</h3>
-          <p className="text-sm text-gray-500 mb-2">Group organs that are tuned together (e.g. same benefice or area)</p>
-          <div className="relative">
-            <input
-              type="text"
-              placeholder="Type to search or create group..."
-              value={tuningGroupSearch}
-              onChange={(e) => { setTuningGroupSearch(e.target.value); setShowGroupDropdown(true); }}
-              onFocus={() => setShowGroupDropdown(true)}
-              onBlur={() => setTimeout(() => setShowGroupDropdown(false), 200)}
-              className="w-full p-3 border-2 rounded-lg text-lg"
-            />
-            {editingCustomer.tuningGroup && (
-              <button 
-                onClick={() => setTuningGroup('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 text-xl"
-              >✕</button>
-            )}
-            {showGroupDropdown && (
-              <div className="absolute top-full left-0 right-0 bg-white border-2 rounded-b-lg shadow-lg max-h-48 overflow-y-auto z-50">
-                {tuningGroupSearch && !existingTuningGroups.includes(tuningGroupSearch) && (
-                  <div 
-                    onClick={() => setTuningGroup(tuningGroupSearch)}
-                    className="p-3 hover:bg-green-50 cursor-pointer border-b bg-green-50"
-                  >
-                    <span className="text-green-600 font-medium">+ Create "{tuningGroupSearch}"</span>
-                  </div>
-                )}
-                {existingTuningGroups
-                  .filter(g => !tuningGroupSearch || g.toLowerCase().includes(tuningGroupSearch.toLowerCase()))
-                  .map(group => (
-                    <div 
-                      key={group}
-                      onClick={() => setTuningGroup(group)}
-                      className={`p-3 hover:bg-blue-50 cursor-pointer border-b ${editingCustomer.tuningGroup === group ? 'bg-blue-100' : ''}`}
-                    >
-                      {group}
-                      <span className="text-gray-400 text-sm ml-2">
-                        ({customers.filter(c => c.tuningGroup === group).length} organs)
-                      </span>
-                    </div>
-                  ))}
-                {existingTuningGroups.length === 0 && !tuningGroupSearch && (
-                  <div className="p-3 text-gray-400 italic">No groups yet - type to create one</div>
-                )}
-              </div>
-            )}
-          </div>
-          {editingCustomer.tuningGroup && (
-            <div className="mt-3 p-3 bg-blue-50 rounded-lg">
-              <div className="text-sm text-blue-700 font-medium mb-2">Other organs in "{editingCustomer.tuningGroup}":</div>
-              <div className="flex flex-wrap gap-2">
-                {customers.filter(c => c.tuningGroup === editingCustomer.tuningGroup && c.id !== editingCustomer.id).map(c => (
-                  <span key={c.id} className="bg-white px-3 py-1 rounded-full text-sm border">{c.name}</span>
-                ))}
-                {customers.filter(c => c.tuningGroup === editingCustomer.tuningGroup && c.id !== editingCustomer.id).length === 0 && (
-                  <span className="text-gray-400 italic">No other organs in this group yet</span>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="border-t-2 pt-4 mb-6">
-          <h3 className="font-bold text-xl mb-3">📅 Tuning Schedule</h3>
-          <div className="grid grid-cols-6 gap-2">
-            {monthNames.map((month, idx) => (
-              <button key={idx} onClick={() => toggleTuningMonth(idx)} className={`p-4 text-lg rounded-lg border-2 font-medium touch-target ${(editingCustomer.tuningMonths || []).includes(idx) ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-300 hover:border-blue-400'}`}>{month.slice(0, 3)}</button>
-            ))}
-          </div>
-        </div>
-
-        <div className="border-t-2 pt-4">
-          <h3 className="font-bold text-xl mb-3">📋 Job History ({history.length})</h3>
-          <div className="space-y-2 max-h-60 overflow-y-auto">
-            {history.map(booking => (
-              <div key={booking.id} className="p-4 rounded-lg bg-gray-50 border-l-4 border-blue-500">
-                <div className="flex justify-between">
-                  <div className="font-bold">{formatDate(booking.date)}</div>
-                  <div className="font-bold">£{booking.price}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
+  const deleteContact = async (contactId) => {
+    if (!confirm('Delete this contact?')) return;
+    setSaving(true);
+    try {
+      await apiCall('deleteContact', { id: contactId });
+      setContacts(contacts.filter(c => c.id !== contactId));
+    } catch (err) {
+      alert('Failed to delete contact: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
   };
 
   // ============================================================
@@ -2498,7 +2447,175 @@ const CommandCentre = () => {
           </div>
         </div>
       )}
-      {view === 'customerDetail' && editingCustomer && <CustomerDetailView />}
+      {view === 'customerDetail' && editingCustomer && (() => {
+        const customerContacts = contacts.filter(c => c.customerId === editingCustomer.id);
+        const history = getCustomerHistory(editingCustomer.id);
+        
+        return (
+          <div className="bg-white rounded-lg shadow-xl p-6 max-w-4xl mx-auto">
+            <div className="flex justify-between items-start mb-6">
+              <h2 className="text-3xl font-bold">{editingCustomer.name}</h2>
+              <button onClick={() => { setView('customers'); setEditingContact(null); setShowAddContact(false); }} className="bg-gray-300 px-6 py-3 rounded-lg text-xl touch-target">← Back</button>
+            </div>
+            
+            {/* Contacts Section */}
+            <div className="mb-6">
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="font-bold text-xl">👥 Contacts ({customerContacts.length})</h3>
+                <button onClick={() => { setShowAddContact(true); setEditingContact(null); }} className="bg-blue-500 text-white px-4 py-2 rounded-lg">+ Add Contact</button>
+              </div>
+              
+              {showAddContact && (
+                <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4 mb-4">
+                  <h4 className="font-bold mb-3">New Contact</h4>
+                  <div className="grid grid-cols-2 gap-3">
+                    <input type="text" placeholder="Name *" value={newContactName} onChange={(e) => setNewContactName(e.target.value)} className="p-3 border-2 rounded-lg" />
+                    <input type="text" placeholder="Role (e.g. Organist, Treasurer)" value={newContactRole} onChange={(e) => setNewContactRole(e.target.value)} className="p-3 border-2 rounded-lg" />
+                    <input type="tel" placeholder="Phone" value={newContactPhone} onChange={(e) => setNewContactPhone(e.target.value)} className="p-3 border-2 rounded-lg" />
+                    <input type="email" placeholder="Email" value={newContactEmail} onChange={(e) => setNewContactEmail(e.target.value)} className="p-3 border-2 rounded-lg" />
+                  </div>
+                  <div className="flex gap-2 mt-3">
+                    <button onClick={addContact} disabled={!newContactName} className="bg-green-500 text-white px-6 py-2 rounded-lg disabled:bg-gray-300">Save</button>
+                    <button onClick={() => { setShowAddContact(false); setNewContactName(''); setNewContactRole(''); setNewContactPhone(''); setNewContactEmail(''); }} className="bg-gray-300 px-6 py-2 rounded-lg">Cancel</button>
+                  </div>
+                </div>
+              )}
+              
+              {customerContacts.length === 0 && !showAddContact ? (
+                <p className="text-gray-400 italic">No contacts yet</p>
+              ) : (
+                <div className="grid gap-3">
+                  {customerContacts.map(contact => (
+                    <div key={contact.id} className="bg-gray-50 p-4 rounded-lg">
+                      {editingContact?.id === contact.id ? (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-2 gap-3">
+                            <input type="text" value={editingContact.name || ''} onChange={(e) => setEditingContact({...editingContact, name: e.target.value})} className="p-2 border-2 rounded" placeholder="Name" />
+                            <input type="text" value={editingContact.role || ''} onChange={(e) => setEditingContact({...editingContact, role: e.target.value})} className="p-2 border-2 rounded" placeholder="Role" />
+                            <input type="tel" value={editingContact.phone || ''} onChange={(e) => setEditingContact({...editingContact, phone: e.target.value})} className="p-2 border-2 rounded" placeholder="Phone" />
+                            <input type="email" value={editingContact.email || ''} onChange={(e) => setEditingContact({...editingContact, email: e.target.value})} className="p-2 border-2 rounded" placeholder="Email" />
+                          </div>
+                          <div className="flex gap-2">
+                            <button onClick={() => saveContact(editingContact)} className="bg-green-500 text-white px-4 py-2 rounded">Save</button>
+                            <button onClick={() => setEditingContact(null)} className="bg-gray-300 px-4 py-2 rounded">Cancel</button>
+                            <button onClick={() => deleteContact(contact.id)} className="bg-red-500 text-white px-4 py-2 rounded ml-auto">Delete</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <div className="font-bold text-lg">{contact.name}</div>
+                            {contact.role && <div className="text-blue-600">{contact.role}</div>}
+                            <div className="flex gap-4 mt-2">
+                              {contact.phone && <a href={`tel:${contact.phone}`} className="text-lg font-bold text-green-600">📞 {contact.phone}</a>}
+                              {contact.email && <a href={`mailto:${contact.email}`} className="text-blue-600">✉️ {contact.email}</a>}
+                            </div>
+                          </div>
+                          <button onClick={() => setEditingContact({...contact})} className="text-gray-400 hover:text-blue-500 text-xl">✏️</button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Tuning Group Section */}
+            <div className="border-t-2 pt-4 mb-6">
+              <h3 className="font-bold text-xl mb-3">🔗 Tuning Group</h3>
+              <p className="text-sm text-gray-500 mb-2">Group organs that are tuned together (e.g. same benefice or area)</p>
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="Type to search or create group..."
+                  value={tuningGroupSearch}
+                  onChange={(e) => { setTuningGroupSearch(e.target.value); setShowGroupDropdown(true); }}
+                  onFocus={() => setShowGroupDropdown(true)}
+                  onBlur={() => setTimeout(() => setShowGroupDropdown(false), 200)}
+                  className="w-full p-3 border-2 rounded-lg text-lg"
+                />
+                {editingCustomer.tuningGroup && (
+                  <button 
+                    onClick={() => setTuningGroup('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 text-xl"
+                  >✕</button>
+                )}
+                {showGroupDropdown && (
+                  <div className="absolute top-full left-0 right-0 bg-white border-2 rounded-b-lg shadow-lg max-h-48 overflow-y-auto z-50">
+                    {tuningGroupSearch && !existingTuningGroups.includes(tuningGroupSearch) && (
+                      <div 
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => setTuningGroup(tuningGroupSearch)}
+                        className="p-3 hover:bg-green-50 cursor-pointer border-b bg-green-50"
+                      >
+                        <span className="text-green-600 font-medium">+ Create "{tuningGroupSearch}"</span>
+                      </div>
+                    )}
+                    {existingTuningGroups
+                      .filter(g => !tuningGroupSearch || g.toLowerCase().includes(tuningGroupSearch.toLowerCase()))
+                      .map(group => (
+                        <div 
+                          key={group}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => setTuningGroup(group)}
+                          className={`p-3 hover:bg-blue-50 cursor-pointer border-b ${editingCustomer.tuningGroup === group ? 'bg-blue-100' : ''}`}
+                        >
+                          {group}
+                          <span className="text-gray-400 text-sm ml-2">
+                            ({customers.filter(c => c.tuningGroup === group).length} organs)
+                          </span>
+                        </div>
+                      ))}
+                    {existingTuningGroups.length === 0 && !tuningGroupSearch && (
+                      <div className="p-3 text-gray-400 italic">No groups yet - type to create one</div>
+                    )}
+                  </div>
+                )}
+              </div>
+              {editingCustomer.tuningGroup && (
+                <div className="mt-3 p-3 bg-blue-50 rounded-lg">
+                  <div className="text-sm text-blue-700 font-medium mb-2">Other organs in "{editingCustomer.tuningGroup}":</div>
+                  <div className="flex flex-wrap gap-2">
+                    {customers.filter(c => c.tuningGroup === editingCustomer.tuningGroup && c.id !== editingCustomer.id).map(c => (
+                      <span key={c.id} className="bg-white px-3 py-1 rounded-full text-sm border">{c.name}</span>
+                    ))}
+                    {customers.filter(c => c.tuningGroup === editingCustomer.tuningGroup && c.id !== editingCustomer.id).length === 0 && (
+                      <span className="text-gray-400 italic">No other organs in this group yet</span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Tuning Schedule Section */}
+            <div className="border-t-2 pt-4 mb-6">
+              <h3 className="font-bold text-xl mb-3">📅 Tuning Schedule</h3>
+              <div className="grid grid-cols-6 gap-2">
+                {monthNames.map((month, idx) => (
+                  <button key={idx} onClick={() => toggleTuningMonth(idx)} className={`p-4 text-lg rounded-lg border-2 font-medium touch-target ${(editingCustomer.tuningMonths || []).includes(idx) ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-300 hover:border-blue-400'}`}>{month.slice(0, 3)}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* Job History Section */}
+            <div className="border-t-2 pt-4">
+              <h3 className="font-bold text-xl mb-3">📋 Job History ({history.length})</h3>
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {history.length === 0 ? (
+                  <p className="text-gray-400 italic">No jobs yet</p>
+                ) : history.map(booking => (
+                  <div key={booking.id} className="p-4 rounded-lg bg-gray-50 border-l-4 border-blue-500">
+                    <div className="flex justify-between">
+                      <div className="font-bold">{formatDate(booking.date)}</div>
+                      <div className="font-bold">£{booking.price}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {view === 'reports' && <ReportsView />}
       
       {showProjectSummary && <ProjectSummaryModal project={showProjectSummary} onClose={() => setShowProjectSummary(null)} />}
