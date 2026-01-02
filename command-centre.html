@@ -746,15 +746,30 @@ const CommandCentre = () => {
       const type = isFault ? 'fault' : bookingType;
       const price = customQuote ? parseFloat(customQuote) : (isFault ? DEFAULT_PRICES.fault : 0); 
       
-      // If booking a group, book all customers in the group
+      // If booking a group, book all customers in the group directly (don't use addBooking which clears state)
       if (selectedGroupToBook && selectedGroupToBook.length > 1) {
-        for (const item of selectedGroupToBook) {
-          await addBooking(dateStr, item.customer.id, type, price, jobNotes, null, isFault ? bookingType : null);
+        setSaving(true);
+        try {
+          const newBookings = [];
+          for (const item of selectedGroupToBook) {
+            const svcType = isFault ? bookingType : type;
+            const result = await apiCall('addBooking', { data: { date: dateStr, customerId: item.customer.id, type, serviceType: svcType, price: price || 0, status: 'scheduled', notes: jobNotes || '' } });
+            newBookings.push({ id: result.id, date: dateStr, customerId: item.customer.id, type, serviceType: svcType, price: price || 0, status: 'scheduled', notes: jobNotes || '' });
+          }
+          setBookings([...bookings, ...newBookings]);
+          setLastSaved(new Date());
+        } catch (err) {
+          alert('Failed to save group booking: ' + err.message);
+        } finally {
+          setSaving(false);
         }
         setSelectedGroupToBook(null);
+        setSelectedCustomerToBook(null);
+        setJobNotes('');
+        setCustomQuote('');
       } else {
         // For faults, pass serviceType (OTS/TSC/WS) separately for pricing reference
-        addBooking(dateStr, selectedCustomerToBook.id, type, price, jobNotes, selectedTicketToBook, isFault ? bookingType : null);
+        await addBooking(dateStr, selectedCustomerToBook.id, type, price, jobNotes, selectedTicketToBook, isFault ? bookingType : null);
       }
     }
     else { setSelectedDay(dateStr); }
@@ -2236,41 +2251,53 @@ const CommandCentre = () => {
               {jobsDue.length === 0 ? (
                 <div className="text-center py-8"><div className="text-5xl mb-3">🎉</div><p className="text-gray-500 text-lg">All caught up!</p></div>
               ) : (() => {
-                // Group jobs by tuningGroup
+                // Group jobs by tuningGroup AND month (only group if same group AND same due month)
                 const grouped = {};
                 const ungrouped = [];
                 jobsDue.forEach(item => {
                   const group = item.customer.tuningGroup;
                   if (group) {
-                    if (!grouped[group]) grouped[group] = [];
-                    grouped[group].push(item);
+                    // Key by both group name and month so organs only group when due the same month
+                    const groupKey = `${group}|||${item.month}|||${item.year}`;
+                    if (!grouped[groupKey]) grouped[groupKey] = { name: group, month: item.month, year: item.year, monthName: item.monthName, items: [] };
+                    grouped[groupKey].items.push(item);
                   } else {
                     ungrouped.push(item);
                   }
                 });
                 
+                // Separate into actual groups (2+ items) and singles
+                const actualGroups = [];
+                Object.values(grouped).forEach(g => {
+                  if (g.items.length > 1) {
+                    actualGroups.push(g);
+                  } else {
+                    ungrouped.push(g.items[0]);
+                  }
+                });
+                
                 return (
                   <>
-                    {/* Grouped tunings */}
-                    {Object.entries(grouped).map(([groupName, items]) => (
-                      <div key={groupName} className={`rounded-lg border-2 overflow-hidden ${items.some(i => i.urgent) ? 'border-amber-400 bg-amber-50' : 'border-blue-300 bg-blue-50'}`}>
+                    {/* Grouped tunings (only when 2+ organs due same month) */}
+                    {actualGroups.map((group, gIdx) => (
+                      <div key={gIdx} className={`rounded-lg border-2 overflow-hidden ${group.items.some(i => i.urgent) ? 'border-amber-400 bg-amber-50' : 'border-blue-300 bg-blue-50'}`}>
                         <div className="p-3 bg-white border-b flex justify-between items-center">
                           <div>
-                            <span className="font-bold text-lg">🔗 {groupName}</span>
-                            <span className="text-sm text-gray-500 ml-2">({items.length} organs)</span>
+                            <span className="font-bold text-lg">🔗 {group.name}</span>
+                            <span className="text-sm text-gray-500 ml-2">({group.items.length} organs • {group.monthName})</span>
                           </div>
-                          {items.some(i => i.urgent) && <span className="text-amber-600 font-bold">⚠️</span>}
+                          {group.items.some(i => i.urgent) && <span className="text-amber-600 font-bold">⚠️</span>}
                         </div>
                         <div className="p-2 space-y-1">
-                          {items.map((item, idx) => (
+                          {group.items.map((item, idx) => (
                             <div 
                               key={idx}
-                              onClick={() => { setSelectedCustomerToBook(item.customer); setBookingType('OTS'); setCustomQuote(''); setJobNotes(''); }}
+                              onClick={() => { setSelectedCustomerToBook(item.customer); setSelectedGroupToBook(null); setBookingType('OTS'); setCustomQuote(''); setJobNotes(''); }}
                               className={`p-3 rounded cursor-pointer transition-all ${selectedCustomerToBook?.id === item.customer.id ? 'bg-green-200 ring-2 ring-green-500' : 'bg-white hover:bg-gray-100'}`}
                             >
                               <div className="flex justify-between">
                                 <span className="font-medium">{item.customer.name}</span>
-                                <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{item.monthName}</span>
+                                <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{item.urgent && '⚠️'}</span>
                               </div>
                             </div>
                           ))}
@@ -2279,28 +2306,29 @@ const CommandCentre = () => {
                           <button
                             onClick={() => {
                               // Select all customers in group for booking
-                              const firstItem = items[0];
+                              const firstItem = group.items[0];
                               setSelectedCustomerToBook(firstItem.customer);
-                              setSelectedGroupToBook(items);
+                              setSelectedGroupToBook(group.items);
                               setBookingType('OTS');
                               setCustomQuote('');
                               setJobNotes('');
                             }}
                             className="w-full py-2 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600"
                           >
-                            📅 Book All {items.length} Together
+                            📅 Book All {group.items.length} Together
                           </button>
                         </div>
                       </div>
                     ))}
                     
-                    {/* Ungrouped tunings */}
+                    {/* Ungrouped tunings (including organs in groups but due alone this month) */}
                     {ungrouped.map((item, idx) => (
                       <div key={`ungrouped-${idx}`} onClick={() => { setSelectedCustomerToBook(item.customer); setSelectedGroupToBook(null); setBookingType('OTS'); setCustomQuote(''); setJobNotes(''); }}
                         className={`p-4 rounded-lg cursor-pointer transition-all touch-target ${item.urgent ? 'bg-amber-50 border-2 border-amber-400' : 'bg-gray-50 border-2 border-gray-200'} ${selectedCustomerToBook?.id === item.customer.id ? 'ring-4 ring-green-500' : 'hover:border-blue-400'}`}>
                         <div className="font-bold text-lg">{item.customer.name}</div>
                         <div className="flex justify-between items-center mt-1">
                           <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{item.monthName} {item.urgent && '⚠️'}</span>
+                          {item.customer.tuningGroup && <span className="text-xs text-blue-500">🔗 {item.customer.tuningGroup}</span>}
                         </div>
                       </div>
                     ))}
