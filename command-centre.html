@@ -279,11 +279,12 @@ const CommandCentre = () => {
     }).length;
     
     // For coloring the calendar, determine which unbooked days are "reserved" vs "free"
-    // We'll mark the LAST N unbooked FUTURE days as reserved (filling from end of year backwards)
-    // This way, free days appear at the start of the remaining year
+    // Reserved days fill from START of year forwards (January first)
+    // Free days appear at the END of the year
+    // As tunings get booked, they lock in place and reserved block shrinks
     const futureUnbookedDays = unbookedDays.filter(d => d >= today);
     const reservedDays = new Set();
-    const sortedFutureUnbooked = [...futureUnbookedDays].sort((a, b) => b.localeCompare(a)); // Latest first
+    const sortedFutureUnbooked = [...futureUnbookedDays].sort((a, b) => a.localeCompare(b)); // Earliest first
     for (let i = 0; i < Math.min(daysNeededForTunings, sortedFutureUnbooked.length); i++) {
       reservedDays.add(sortedFutureUnbooked[i]);
     }
