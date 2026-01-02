@@ -244,7 +244,7 @@ const CommandCentre = () => {
     // Days needed for remaining tunings (2 per day, half-day each)
     const daysNeededForTunings = Math.ceil(tuningsRemaining / 2);
     
-    // Calculate workdays in the year (Mon-Wed only)
+    // Calculate workdays in the year (Mon-Fri)
     const getAllWorkdays = () => {
       const workdays = [];
       for (let month = 0; month < 12; month++) {
@@ -533,11 +533,12 @@ const CommandCentre = () => {
   // BOOKING FUNCTIONS
   // ============================================================
   
-  const addBooking = async (date, customerId, type, price, notes, ticket = null) => {
+  const addBooking = async (date, customerId, type, price, notes, ticket = null, serviceType = null) => {
     setSaving(true);
     try {
-      const result = await apiCall('addBooking', { data: { date, customerId, type, serviceType: type, price: price || 0, status: 'scheduled', notes: notes || '' } });
-      setBookings([...bookings, { id: result.id, date, customerId, type, serviceType: type, price: price || 0, status: 'scheduled', notes: notes || '' }]);
+      const svcType = serviceType || type; // serviceType defaults to type if not specified
+      const result = await apiCall('addBooking', { data: { date, customerId, type, serviceType: svcType, price: price || 0, status: 'scheduled', notes: notes || '' } });
+      setBookings([...bookings, { id: result.id, date, customerId, type, serviceType: svcType, price: price || 0, status: 'scheduled', notes: notes || '' }]);
       if (ticket) {
         await apiCall('updateTicket', { data: { id: ticket.id, status: 'scheduled', bookingId: result.id } });
         setTickets(tickets.filter(t => t.id !== ticket.id));
@@ -692,7 +693,14 @@ const CommandCentre = () => {
     if (!isWorkDay(year, month, day)) return;
     if (isDayOff(dateStr)) return;
     if (allocatingProject) { toggleProjectDay(dateStr); return; }
-    if (selectedCustomerToBook) { const price = customQuote ? parseFloat(customQuote) : 0; addBooking(dateStr, selectedCustomerToBook.id, bookingType, price, jobNotes, selectedTicketToBook); }
+    if (selectedCustomerToBook) { 
+      // Use 'fault' type if booking from a ticket, otherwise use selected bookingType
+      const isFault = selectedTicketToBook !== null;
+      const type = isFault ? 'fault' : bookingType;
+      const price = customQuote ? parseFloat(customQuote) : (isFault ? DEFAULT_PRICES.fault : 0); 
+      // For faults, pass serviceType (OTS/TSC/WS) separately for pricing reference
+      addBooking(dateStr, selectedCustomerToBook.id, type, price, jobNotes, selectedTicketToBook, isFault ? bookingType : null); 
+    }
     else { setSelectedDay(dateStr); }
   };
 
