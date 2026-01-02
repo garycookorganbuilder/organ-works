@@ -10,79 +10,37 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     * { touch-action: manipulation; }
-    body { 
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
-      margin: 0; 
-    }
-    
-    /* ADHD-friendly: Reduce visual noise when booking */
-    .focus-mode .dim-when-booking {
-      opacity: 0.3;
-      pointer-events: none;
-      filter: grayscale(50%);
-    }
-    
-    /* ADHD-friendly: Clear visual feedback on booking panel */
-    .booking-highlight {
-      animation: pulse-green 1.5s ease-in-out infinite;
-    }
-    
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; }
+    .focus-mode .dim-when-booking { opacity: 0.3; pointer-events: none; filter: grayscale(50%); }
+    .booking-highlight { animation: pulse-green 1.5s ease-in-out infinite; }
     @keyframes pulse-green {
       0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
       50% { box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
     }
-    
-    /* Large touch targets */
-    .touch-target {
-      min-height: 48px;
-      min-width: 48px;
-    }
-    
-    /* Loading state */
-    .loading-spinner {
-      border: 4px solid #f3f3f3;
-      border-top: 4px solid #3b82f6;
-      border-radius: 50%;
-      width: 40px;
-      height: 40px;
-      animation: spin 1s linear infinite;
-    }
-    
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
-    
-    @media print {
-      .no-print { display: none !important; }
-      body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-    }
+    .touch-target { min-height: 48px; min-width: 48px; }
+    .loading-spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3b82f6; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    @media print { .no-print { display: none !important; } body { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
+    .scroll-panel { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+    .scroll-panel::-webkit-scrollbar { width: 6px; }
+    .scroll-panel::-webkit-scrollbar-track { background: transparent; }
+    .scroll-panel::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 3px; }
   </style>
 </head>
 <body>
   <div id="root"></div>
 
   <script type="text/babel">
-const { useState, useEffect, useCallback } = React;
-
-// ============================================================
-// CONFIGURATION
-// ============================================================
+const { useState, useEffect, useCallback, useMemo } = React;
 
 const getApiUrl = () => localStorage.getItem('organWorks_apiUrl') || '';
 const setApiUrl = (url) => localStorage.setItem('organWorks_apiUrl', url);
 
-// ============================================================
-// API FUNCTIONS
-// ============================================================
-
 const apiCall = async (action, params = {}) => {
   const API_URL = getApiUrl();
   if (!API_URL) throw new Error('API URL not configured');
-  
   const url = new URL(API_URL);
   url.searchParams.set('action', action);
-  
   Object.keys(params).forEach(key => {
     if (typeof params[key] === 'object') {
       url.searchParams.set(key, JSON.stringify(params[key]));
@@ -90,33 +48,16 @@ const apiCall = async (action, params = {}) => {
       url.searchParams.set(key, params[key]);
     }
   });
-  
   const response = await fetch(url.toString());
   const data = await response.json();
-  
-  if (data && data.error) {
-    throw new Error(data.error);
-  }
-  
+  if (data && data.error) throw new Error(data.error);
   return data;
 };
 
-// ============================================================
-// MAIN COMPONENT
-// ============================================================
-
 const CommandCentre = () => {
-  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
-                      'July', 'August', 'September', 'October', 'November', 'December'];
+  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-
-  // Default pricing
-  const DEFAULT_PRICES = {
-    tuning_full: 550,
-    tuning_half: 300,
-    fault: 300,
-    big: 550
-  };
+  const DEFAULT_PRICES = { tuning_full: 550, tuning_half: 300, fault: 300, big: 550 };
 
   // State
   const [isConfigured, setIsConfigured] = useState(!!getApiUrl());
@@ -131,8 +72,10 @@ const CommandCentre = () => {
   const [bookings, setBookings] = useState([]);
   const [daysOff, setDaysOff] = useState([]);
   const [tickets, setTickets] = useState([]);
+  const [jobs, setJobs] = useState([]);
+  const [timeEntries, setTimeEntries] = useState([]);
+  const [materials, setMaterials] = useState([]);
 
-  const [viewMode, setViewMode] = useState('year');
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedCustomerToBook, setSelectedCustomerToBook] = useState(null);
   const [selectedTicketToBook, setSelectedTicketToBook] = useState(null);
@@ -146,75 +89,59 @@ const CommandCentre = () => {
   const [newTicketCustomer, setNewTicketCustomer] = useState('');
   const [newTicketDescription, setNewTicketDescription] = useState('');
   const [customerSearch, setCustomerSearch] = useState('');
+  const [plannerSearch, setPlannerSearch] = useState('');
+  const [showPlannerSearchResults, setShowPlannerSearchResults] = useState(false);
+  const [showProjectSummary, setShowProjectSummary] = useState(null);
   
   // Invoice calculator
-  const [showInvoiceCalc, setShowInvoiceCalc] = useState(null); // booking object or null
+  const [showInvoiceCalc, setShowInvoiceCalc] = useState(null);
   const [selectedBand, setSelectedBand] = useState(null);
-  const [selectedDistance, setSelectedDistance] = useState(null); // distance premium override
-  const [customAmount, setCustomAmount] = useState(''); // custom service charge
+  const [selectedDistance, setSelectedDistance] = useState(null);
+  const [customAmount, setCustomAmount] = useState('');
   const [pricing, setPricing] = useState({ timeBands: [], distanceBands: [] });
-  const [invoiceMaterials, setInvoiceMaterials] = useState([]); // [{description, cost}]
+  const [invoiceMaterials, setInvoiceMaterials] = useState([]);
   const [newMaterialDesc, setNewMaterialDesc] = useState('');
   const [newMaterialCost, setNewMaterialCost] = useState('');
-  const [materialsList, setMaterialsList] = useState([]); // quick-pick from sheet
+  const [materialsList, setMaterialsList] = useState([]);
   const [materialSearch, setMaterialSearch] = useState('');
   const [materialQty, setMaterialQty] = useState(1);
   const [newMaterialQty, setNewMaterialQty] = useState(1);
-  const [selectedMaterial, setSelectedMaterial] = useState(null); // {name, price}
+  const [selectedMaterial, setSelectedMaterial] = useState(null);
 
-  // Project allocation mode
-  const [allocatingProject, setAllocatingProject] = useState(null); // {id, name, customerId} being allocated
+  // Project allocation
+  const [allocatingProject, setAllocatingProject] = useState(null);
   const [showNewProject, setShowNewProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectCustomer, setNewProjectCustomer] = useState(null);
   const [projectCustomerSearch, setProjectCustomerSearch] = useState('');
   const [newProjectEstDays, setNewProjectEstDays] = useState('');
 
-  // Current year for planner
   const currentYear = currentDate.getFullYear();
-  
-  // Planner months
-  const plannerMonths = monthNames.map((name, idx) => ({
-    name,
-    year: currentYear,
-    month: idx,
-    days: new Date(currentYear, idx + 1, 0).getDate()
-  }));
+  const plannerMonths = monthNames.map((name, idx) => ({ name, year: currentYear, month: idx, days: new Date(currentYear, idx + 1, 0).getDate() }));
 
-  // ============================================================
-  // DATA LOADING
-  // ============================================================
-  
+  // Data loading
   const loadData = useCallback(async () => {
     if (!getApiUrl()) return;
-    
     setLoading(true);
     try {
       const data = await apiCall('getAllData');
-      
-      // Parse customers
       const parsedCustomers = (data.customers || []).map(c => ({
         ...c,
-        tuningMonths: typeof c.tuningMonths === 'string' ? 
-          (c.tuningMonths ? JSON.parse(c.tuningMonths) : []) : 
-          (c.tuningMonths || []),
+        tuningMonths: typeof c.tuningMonths === 'string' ? (c.tuningMonths ? JSON.parse(c.tuningMonths) : []) : (c.tuningMonths || []),
         customRate: c.customRate ? parseFloat(c.customRate) : null
       }));
-      
       setCustomers(parsedCustomers);
       setContacts(data.contacts || []);
       setProjects(data.projects || []);
-      // Normalize booking dates to YYYY-MM-DD format
-      const normalizedBookings = (data.bookings || []).map(b => ({
-        ...b,
-        date: b.date ? b.date.split('T')[0] : b.date
-      }));
+      const normalizedBookings = (data.bookings || []).map(b => ({ ...b, date: b.date ? b.date.split('T')[0] : b.date }));
       setBookings(normalizedBookings);
       setDaysOff((data.daysOff || []).map(d => d.date));
       setTickets(data.tickets || []);
       setPricing(data.pricing || { timeBands: [], distanceBands: [] });
       setMaterialsList(data.materialsList || []);
-      
+      setJobs(data.jobs || []);
+      setTimeEntries(data.timeEntries || []);
+      setMaterials(data.materials || []);
     } catch (err) {
       console.error('Failed to load data:', err);
       alert('Failed to load data: ' + err.message);
@@ -223,48 +150,23 @@ const CommandCentre = () => {
     }
   }, []);
 
-  useEffect(() => {
-    if (isConfigured) {
-      loadData();
-    }
-  }, [isConfigured, loadData]);
+  useEffect(() => { if (isConfigured) loadData(); }, [isConfigured, loadData]);
 
-  // ============================================================
-  // HELPER FUNCTIONS
-  // ============================================================
-  
-  const getDateString = (year, month, day) => 
-    `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  
+  // Helper functions
+  const getDateString = (year, month, day) => `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   const getDayOfWeek = (year, month, day) => new Date(year, month, day).getDay();
-  
-  const isWorkDay = (year, month, day) => {
-    const dow = getDayOfWeek(year, month, day);
-    return dow >= 1 && dow <= 5; // Mon-Fri available
-  };
-  
+  const isWorkDay = (year, month, day) => { const dow = getDayOfWeek(year, month, day); return dow >= 1 && dow <= 5; };
   const getBookingsForDay = (date) => bookings.filter(b => b.date === date);
-  
   const getCustomerById = (id) => customers.find(c => c.id === id);
-  
   const isDayOff = (date) => daysOff.includes(date);
-
-  const getJobPrice = (type, customer, customAmount) => {
-    if (customAmount) return parseFloat(customAmount);
-    if (type === 'tuning_full') return customer?.customRate || DEFAULT_PRICES.tuning_full;
-    if (type === 'tuning_half') return customer?.customRate ? Math.round(customer.customRate * 0.55) : DEFAULT_PRICES.tuning_half;
-    if (type === 'fault') return DEFAULT_PRICES.fault;
-    if (type === 'big') return DEFAULT_PRICES.big;
-    return 0;
-  };
+  const formatDate = (dateStr) => { if (!dateStr) return ''; const d = new Date(dateStr); return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); };
+  const formatCurrency = (amount) => '£' + (parseFloat(amount) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const getJobTypeLabel = (type) => {
-    // New service types
     if (type === 'OTS') return 'On-site (with helper)';
     if (type === 'TSC') return 'Solo Site Work';
     if (type === 'WS') return 'Workshop';
     if (type === 'project') return 'Project Day';
-    // Legacy types
     if (type === 'tuning_full') return 'Tuning (Full Day)';
     if (type === 'tuning_half') return 'Tuning (Half Day)';
     if (type === 'fault') return 'Fault Visit';
@@ -273,12 +175,10 @@ const CommandCentre = () => {
   };
 
   const getJobTypeColor = (type) => {
-    // New service types
     if (type === 'OTS') return 'blue';
     if (type === 'TSC') return 'green';
     if (type === 'WS') return 'purple';
     if (type === 'project') return 'pink';
-    // Legacy types for existing bookings
     if (type?.startsWith('tuning')) return 'blue';
     if (type === 'fault') return 'orange';
     if (type === 'big') return 'red';
@@ -288,24 +188,11 @@ const CommandCentre = () => {
   const isCustomerBookedInMonth = (customerId, monthIndex, year) => {
     const monthStart = getDateString(year, monthIndex, 1);
     const monthEnd = getDateString(year, monthIndex, new Date(year, monthIndex + 1, 0).getDate());
-    return bookings.some(b => 
-      b.customerId === customerId && 
-      b.date >= monthStart && 
-      b.date <= monthEnd
-    );
+    return bookings.some(b => b.customerId === customerId && b.date >= monthStart && b.date <= monthEnd);
   };
 
-  const getCustomerHistory = (customerId) => {
-    return bookings
-      .filter(b => b.customerId === customerId)
-      .sort((a, b) => new Date(b.date) - new Date(a.date));
-  };
-
-  const getLastTuningPrice = (customerId) => {
-    const history = getCustomerHistory(customerId);
-    const lastTuning = history.find(b => b.type?.startsWith('tuning') && b.status === 'paid');
-    return lastTuning ? parseFloat(lastTuning.price) : null;
-  };
+  const getCustomerHistory = (customerId) => bookings.filter(b => b.customerId === customerId).sort((a, b) => new Date(b.date) - new Date(a.date));
+  const getLastTuningPrice = (customerId) => { const history = getCustomerHistory(customerId); const lastTuning = history.find(b => b.type?.startsWith('tuning') && b.status === 'paid'); return lastTuning ? parseFloat(lastTuning.price) : null; };
 
   const getJobsDue = () => {
     const now = new Date();
@@ -313,11 +200,9 @@ const CommandCentre = () => {
     const thisYear = now.getFullYear();
     const nextMonth = (thisMonth + 1) % 12;
     const nextYear = thisMonth === 11 ? thisYear + 1 : thisYear;
-
     const due = [];
     customers.forEach(customer => {
       if (!customer.tuningMonths || customer.tuningMonths.length === 0) return;
-      
       if (customer.tuningMonths.includes(thisMonth) && !isCustomerBookedInMonth(customer.id, thisMonth, thisYear)) {
         due.push({ customer, month: thisMonth, year: thisYear, monthName: monthNames[thisMonth], urgent: true });
       }
@@ -327,28 +212,185 @@ const CommandCentre = () => {
     });
     return due;
   };
-
   const jobsDue = getJobsDue();
 
-  // Get active projects with allocated days count
   const getActiveProjects = () => {
-    return projects
-      .filter(p => p.status === 'active')
-      .map(p => {
-        // Count allocated days from bookings
-        const allocatedDays = bookings
-          .filter(b => b.type === 'project' && b.projectId === p.id)
-          .map(b => b.date);
-        
-        return {
-          ...p,
-          customerName: customers.find(c => c.id === p.customerId)?.name || 'Unknown',
-          days: allocatedDays
-        };
-      });
+    return projects.filter(p => p.status === 'active').map(p => {
+      const allocatedDays = bookings.filter(b => b.type === 'project' && b.projectId === p.id).map(b => b.date);
+      const projectJobs = jobs.filter(j => j.projectId === p.id);
+      const jobIds = projectJobs.map(j => j.id);
+      const projectTimeEntries = timeEntries.filter(te => jobIds.includes(te.jobId));
+      const totalHours = projectTimeEntries.reduce((sum, te) => sum + (parseFloat(te.duration) || 0), 0);
+      const projectMaterials = materials.filter(m => jobIds.includes(m.jobId));
+      const materialsCost = projectMaterials.reduce((sum, m) => sum + (parseFloat(m.cost) || 0), 0);
+      return { ...p, customerName: customers.find(c => c.id === p.customerId)?.name || 'Unknown', days: allocatedDays, jobs: projectJobs, totalHours, materialsCost, timeEntries: projectTimeEntries, materials: projectMaterials };
+    });
   };
-  
   const activeProjects = getActiveProjects();
+
+  // ============================================================
+  // REPORTS DATA CALCULATIONS
+  // ============================================================
+  
+  const reportsData = useMemo(() => {
+    const now = new Date();
+    const thisYear = now.getFullYear();
+    const thisMonth = now.getMonth();
+    
+    // Monthly breakdown
+    const monthlyData = {};
+    for (let m = 0; m < 12; m++) {
+      monthlyData[m] = { invoiced: 0, paid: 0, outstanding: 0, count: 0 };
+    }
+    
+    bookings.forEach(b => {
+      if (!b.date) return;
+      const d = new Date(b.date);
+      if (d.getFullYear() !== thisYear) return;
+      const month = d.getMonth();
+      const price = parseFloat(b.price) || 0;
+      monthlyData[month].count++;
+      if (b.status === 'paid') {
+        monthlyData[month].paid += price;
+        monthlyData[month].invoiced += price;
+      } else if (b.status === 'invoiced') {
+        monthlyData[month].invoiced += price;
+        monthlyData[month].outstanding += price;
+      }
+    });
+    
+    // Outstanding invoices (aged)
+    const outstandingInvoices = bookings
+      .filter(b => b.status === 'invoiced')
+      .map(b => {
+        const customer = getCustomerById(b.customerId);
+        const invoiceDate = new Date(b.invoiceDate || b.date);
+        const age = Math.floor((now - invoiceDate) / (1000 * 60 * 60 * 24));
+        return { ...b, customerName: customer?.name || 'Unknown', age, invoiceDate };
+      })
+      .sort((a, b) => b.age - a.age);
+    
+    // Needs invoicing
+    const needsInvoicing = bookings
+      .filter(b => b.status === 'completed')
+      .map(b => ({ ...b, customerName: getCustomerById(b.customerId)?.name || 'Unknown' }))
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+    
+    // Awaiting payment
+    const awaitingPayment = bookings
+      .filter(b => b.status === 'invoiced')
+      .map(b => ({ ...b, customerName: getCustomerById(b.customerId)?.name || 'Unknown' }));
+    
+    // Year to date
+    const ytdBookings = bookings.filter(b => b.date && new Date(b.date).getFullYear() === thisYear);
+    const ytdByType = {};
+    ytdBookings.forEach(b => {
+      const type = b.type || 'other';
+      if (!ytdByType[type]) ytdByType[type] = { count: 0, revenue: 0 };
+      ytdByType[type].count++;
+      if (b.status === 'paid' || b.status === 'invoiced') {
+        ytdByType[type].revenue += parseFloat(b.price) || 0;
+      }
+    });
+    const ytdTotal = Object.values(ytdByType).reduce((sum, t) => sum + t.revenue, 0);
+    const ytdPaid = bookings.filter(b => b.date && new Date(b.date).getFullYear() === thisYear && b.status === 'paid').reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0);
+    
+    // Hours by month (from time entries and bookings)
+    const hoursByMonth = {};
+    for (let m = 0; m < 12; m++) hoursByMonth[m] = 0;
+    bookings.forEach(b => {
+      if (!b.date) return;
+      const d = new Date(b.date);
+      if (d.getFullYear() !== thisYear) return;
+      const hours = parseFloat(b.actualHours) || 0;
+      hoursByMonth[d.getMonth()] += hours;
+    });
+    timeEntries.forEach(te => {
+      if (!te.startTime) return;
+      const d = new Date(te.startTime);
+      if (d.getFullYear() !== thisYear) return;
+      hoursByMonth[d.getMonth()] += parseFloat(te.duration) || 0;
+    });
+    const totalHoursYTD = Object.values(hoursByMonth).reduce((a, b) => a + b, 0);
+    
+    // Utilisation
+    const workDaysInYear = () => {
+      let count = 0;
+      for (let m = 0; m < 12; m++) {
+        const daysInMonth = new Date(thisYear, m + 1, 0).getDate();
+        for (let d = 1; d <= daysInMonth; d++) {
+          const dow = new Date(thisYear, m, d).getDay();
+          if (dow >= 1 && dow <= 3) count++; // Mon-Wed
+        }
+      }
+      return count;
+    };
+    const totalWorkDays = workDaysInYear();
+    const daysOffCount = daysOff.filter(d => d && new Date(d).getFullYear() === thisYear).length;
+    const availableDays = totalWorkDays - daysOffCount;
+    const bookedDays = new Set(bookings.filter(b => b.date && new Date(b.date).getFullYear() === thisYear).map(b => b.date)).size;
+    const utilisation = availableDays > 0 ? Math.round((bookedDays / availableDays) * 100) : 0;
+    
+    // Customer revenue ranking
+    const customerRevenue = {};
+    bookings.forEach(b => {
+      if (!b.customerId) return;
+      if (!customerRevenue[b.customerId]) customerRevenue[b.customerId] = { total: 0, count: 0, name: getCustomerById(b.customerId)?.name || 'Unknown' };
+      customerRevenue[b.customerId].count++;
+      if (b.status === 'paid') customerRevenue[b.customerId].total += parseFloat(b.price) || 0;
+    });
+    const topCustomers = Object.entries(customerRevenue)
+      .map(([id, data]) => ({ id, ...data }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 20);
+    
+    // Tuning schedule overview
+    const tuningSchedule = monthNames.map((name, idx) => {
+      const customersThisMonth = customers.filter(c => c.tuningMonths && c.tuningMonths.includes(idx));
+      const booked = customersThisMonth.filter(c => isCustomerBookedInMonth(c.id, idx, thisYear)).length;
+      return { month: name, total: customersThisMonth.length, booked, remaining: customersThisMonth.length - booked };
+    });
+    
+    // Overdue tunings
+    const overdueTunings = [];
+    customers.forEach(c => {
+      if (!c.tuningMonths || c.tuningMonths.length === 0) return;
+      c.tuningMonths.forEach(m => {
+        if (m < thisMonth && !isCustomerBookedInMonth(c.id, m, thisYear)) {
+          overdueTunings.push({ customer: c, dueMonth: monthNames[m], monthsOverdue: thisMonth - m });
+        }
+      });
+    });
+    overdueTunings.sort((a, b) => b.monthsOverdue - a.monthsOverdue);
+    
+    // Project profitability
+    const projectProfitability = activeProjects.map(p => {
+      const labourCost = p.totalHours * 45; // Workshop rate
+      const totalCost = labourCost + p.materialsCost;
+      const estimatedValue = (p.estimatedDays || 0) * 360; // Full day workshop rate
+      const variance = estimatedValue - totalCost;
+      return { ...p, labourCost, totalCost, estimatedValue, variance };
+    });
+    
+    return {
+      monthlyData,
+      outstandingInvoices,
+      needsInvoicing,
+      awaitingPayment,
+      ytdByType,
+      ytdTotal,
+      ytdPaid,
+      hoursByMonth,
+      totalHoursYTD,
+      utilisation,
+      bookedDays,
+      availableDays,
+      topCustomers,
+      tuningSchedule,
+      overdueTunings,
+      projectProfitability
+    };
+  }, [bookings, customers, daysOff, timeEntries, jobs, materials, projects, activeProjects]);
 
   // ============================================================
   // BOOKING FUNCTIONS
@@ -357,50 +399,17 @@ const CommandCentre = () => {
   const addBooking = async (date, customerId, type, price, notes, ticket = null) => {
     setSaving(true);
     try {
-      // Price is calculated later based on actual hours - store 0 for now
-      const result = await apiCall('addBooking', {
-        data: {
-          date,
-          customerId,
-          type,
-          serviceType: type, // OTS, TSC, WS
-          price: price || 0,
-          status: 'scheduled',
-          notes: notes || ''
-        }
-      });
-      
-      // Add to local state
-      setBookings([...bookings, {
-        id: result.id,
-        date,
-        customerId,
-        type,
-        serviceType: type,
-        price: price || 0,
-        status: 'scheduled',
-        notes: notes || ''
-      }]);
-      
-      // If this came from a ticket, mark it scheduled
+      const result = await apiCall('addBooking', { data: { date, customerId, type, serviceType: type, price: price || 0, status: 'scheduled', notes: notes || '' } });
+      setBookings([...bookings, { id: result.id, date, customerId, type, serviceType: type, price: price || 0, status: 'scheduled', notes: notes || '' }]);
       if (ticket) {
-        await apiCall('updateTicket', {
-          data: {
-            id: ticket.id,
-            status: 'scheduled',
-            bookingId: result.id
-          }
-        });
+        await apiCall('updateTicket', { data: { id: ticket.id, status: 'scheduled', bookingId: result.id } });
         setTickets(tickets.filter(t => t.id !== ticket.id));
         setSelectedTicketToBook(null);
       }
-      
-      // Clear booking form
       setSelectedCustomerToBook(null);
       setCustomQuote('');
       setJobNotes('');
       setLastSaved(new Date());
-      
     } catch (err) {
       alert('Failed to save booking: ' + err.message);
     } finally {
@@ -410,16 +419,12 @@ const CommandCentre = () => {
 
   const removeBooking = async (date, bookingId) => {
     if (!confirm('Remove this booking?')) return;
-    
     setSaving(true);
     try {
       await apiCall('deleteBooking', { bookingId });
       setBookings(bookings.filter(b => b.id !== bookingId));
-      
-      // Refresh tickets in case this booking was linked to one
       const ticketData = await apiCall('getTickets');
       setTickets(ticketData || []);
-      
       setLastSaved(new Date());
     } catch (err) {
       alert('Failed to remove booking: ' + err.message);
@@ -434,12 +439,8 @@ const CommandCentre = () => {
       const updates = { id: bookingId, status };
       if (status === 'invoiced') updates.invoiceDate = new Date().toISOString().split('T')[0];
       if (status === 'paid') updates.paidDate = new Date().toISOString().split('T')[0];
-      
       await apiCall('updateBooking', { data: updates });
-      
-      setBookings(bookings.map(b => 
-        b.id === bookingId ? { ...b, ...updates } : b
-      ));
+      setBookings(bookings.map(b => b.id === bookingId ? { ...b, ...updates } : b));
       setLastSaved(new Date());
     } catch (err) {
       alert('Failed to update: ' + err.message);
@@ -466,36 +467,13 @@ const CommandCentre = () => {
     }
   };
 
-  // Project allocation functions
   const createProject = async () => {
     if (!newProjectName || !newProjectCustomer) return;
-    
     setSaving(true);
     try {
-      // Save project to database
-      const result = await apiCall('addProject', {
-        data: {
-          customerId: newProjectCustomer.id,
-          name: newProjectName,
-          estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : '',
-          status: 'active'
-        }
-      });
-      
-      const newProject = {
-        id: result.id,
-        name: newProjectName,
-        customerId: newProjectCustomer.id,
-        customerName: newProjectCustomer.name,
-        estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : null,
-        status: 'active',
-        days: []
-      };
-      
-      // Add to local state
+      const result = await apiCall('addProject', { data: { customerId: newProjectCustomer.id, name: newProjectName, estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : '', status: 'active' } });
+      const newProject = { id: result.id, name: newProjectName, customerId: newProjectCustomer.id, customerName: newProjectCustomer.name, estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : null, status: 'active', days: [] };
       setProjects([...projects, newProject]);
-      
-      // Start allocating
       setAllocatingProject(newProject);
       setShowNewProject(false);
       setNewProjectName('');
@@ -510,51 +488,38 @@ const CommandCentre = () => {
     }
   };
 
+  const deleteProject = async (projectId) => {
+    if (!confirm('Delete this project? All allocated days will also be removed.')) return;
+    setSaving(true);
+    try {
+      const projectBookings = bookings.filter(b => b.projectId === projectId);
+      for (const booking of projectBookings) {
+        await apiCall('deleteBooking', { bookingId: booking.id });
+      }
+      await apiCall('deleteProject', { projectId });
+      setProjects(projects.filter(p => p.id !== projectId));
+      setBookings(bookings.filter(b => b.projectId !== projectId));
+      setShowProjectSummary(null);
+      setAllocatingProject(null);
+      setLastSaved(new Date());
+    } catch (err) {
+      alert('Failed to delete project: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const toggleProjectDay = async (dateStr) => {
     if (!allocatingProject) return;
-    
-    // Check if this day is already allocated to this project
-    const existingBooking = bookings.find(b => 
-      b.type === 'project' && 
-      b.projectId === allocatingProject.id && 
-      b.date === dateStr
-    );
-    
+    const existingBooking = bookings.find(b => b.type === 'project' && b.projectId === allocatingProject.id && b.date === dateStr);
     setSaving(true);
     try {
       if (existingBooking) {
-        // Remove allocation
         await apiCall('deleteBooking', { bookingId: existingBooking.id });
         setBookings(bookings.filter(b => b.id !== existingBooking.id));
       } else {
-        // Add allocation
-        const result = await apiCall('addBooking', {
-          data: {
-            date: dateStr,
-            customerId: allocatingProject.customerId,
-            type: 'project',
-            serviceType: 'project',
-            projectId: allocatingProject.id,
-            projectName: allocatingProject.name,
-            price: 0,
-            status: 'scheduled',
-            notes: allocatingProject.estimatedDays ? `Est: ${allocatingProject.estimatedDays} days` : allocatingProject.name
-          }
-        });
-        
-        setBookings([...bookings, {
-          id: result.id,
-          date: dateStr,
-          customerId: allocatingProject.customerId,
-          type: 'project',
-          serviceType: 'project',
-          projectId: allocatingProject.id,
-          projectName: allocatingProject.name,
-          estimatedDays: allocatingProject.estimatedDays,
-          price: 0,
-          status: 'scheduled',
-          notes: allocatingProject.estimatedDays ? `Est: ${allocatingProject.estimatedDays} days` : allocatingProject.name
-        }]);
+        const result = await apiCall('addBooking', { data: { date: dateStr, customerId: allocatingProject.customerId, type: 'project', serviceType: 'project', projectId: allocatingProject.id, projectName: allocatingProject.name, price: 0, status: 'scheduled', notes: allocatingProject.estimatedDays ? `Est: ${allocatingProject.estimatedDays} days` : allocatingProject.name } });
+        setBookings([...bookings, { id: result.id, date: dateStr, customerId: allocatingProject.customerId, type: 'project', serviceType: 'project', projectId: allocatingProject.id, projectName: allocatingProject.name, estimatedDays: allocatingProject.estimatedDays, price: 0, status: 'scheduled', notes: allocatingProject.estimatedDays ? `Est: ${allocatingProject.estimatedDays} days` : allocatingProject.name }]);
       }
       setLastSaved(new Date());
     } catch (err) {
@@ -567,52 +532,23 @@ const CommandCentre = () => {
   const handleDayClick = (dateStr, year, month, day) => {
     if (!isWorkDay(year, month, day)) return;
     if (isDayOff(dateStr)) return;
-    
-    // Project allocation mode
-    if (allocatingProject) {
-      toggleProjectDay(dateStr);
-      return;
-    }
-    
-    if (selectedCustomerToBook) {
-      const price = customQuote ? parseFloat(customQuote) : 0; // Price calculated later from hours
-      addBooking(dateStr, selectedCustomerToBook.id, bookingType, price, jobNotes, selectedTicketToBook);
-    } else {
-      setSelectedDay(dateStr);
-    }
+    if (allocatingProject) { toggleProjectDay(dateStr); return; }
+    if (selectedCustomerToBook) { const price = customQuote ? parseFloat(customQuote) : 0; addBooking(dateStr, selectedCustomerToBook.id, bookingType, price, jobNotes, selectedTicketToBook); }
+    else { setSelectedDay(dateStr); }
   };
 
-  // ============================================================
-  // TICKET FUNCTIONS
-  // ============================================================
-
+  // Ticket functions
   const addTicket = async () => {
     if (!newTicketCustomer || !newTicketDescription) return;
-    
     setSaving(true);
     try {
-      const result = await apiCall('addTicket', {
-        data: {
-          customerId: newTicketCustomer,
-          description: newTicketDescription,
-          status: 'new'
-        }
-      });
-      
-      setTickets([...tickets, {
-        id: result.id,
-        customerId: newTicketCustomer,
-        description: newTicketDescription,
-        status: 'new',
-        createdAt: new Date().toISOString()
-      }]);
-      
+      const result = await apiCall('addTicket', { data: { customerId: newTicketCustomer, description: newTicketDescription, status: 'new' } });
+      setTickets([...tickets, { id: result.id, customerId: newTicketCustomer, description: newTicketDescription, status: 'new', createdAt: new Date().toISOString() }]);
       setShowAddTicket(false);
       setNewTicketCustomer('');
       setNewTicketDescription('');
       setCustomerSearch('');
       setLastSaved(new Date());
-      
     } catch (err) {
       alert('Failed to add: ' + err.message);
     } finally {
@@ -630,30 +566,15 @@ const CommandCentre = () => {
 
   const deleteTicket = async (ticketId) => {
     setSaving(true);
-    try {
-      await apiCall('deleteTicket', { ticketId });
-      setTickets(tickets.filter(t => t.id !== ticketId));
-    } catch (err) {
-      alert('Failed to delete: ' + err.message);
-    } finally {
-      setSaving(false);
-    }
+    try { await apiCall('deleteTicket', { ticketId }); setTickets(tickets.filter(t => t.id !== ticketId)); }
+    catch (err) { alert('Failed to delete: ' + err.message); }
+    finally { setSaving(false); }
   };
 
-  // ============================================================
-  // CUSTOMER FUNCTIONS
-  // ============================================================
-  
   const updateCustomer = async (customer) => {
     setSaving(true);
     try {
-      await apiCall('updateCustomer', { 
-        data: {
-          ...customer,
-          tuningMonths: customer.tuningMonths
-        }
-      });
-      
+      await apiCall('updateCustomer', { data: { ...customer, tuningMonths: customer.tuningMonths } });
       setCustomers(customers.map(c => c.id === customer.id ? customer : c));
       setLastSaved(new Date());
     } catch (err) {
@@ -663,27 +584,21 @@ const CommandCentre = () => {
     }
   };
 
-  // ============================================================
-  // STATS
-  // ============================================================
-  
   const getStats = () => {
     const completedJobs = bookings.filter(b => b.status === 'completed');
     const uninvoicedTotal = completedJobs.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0);
     const awaitingPayment = bookings.filter(b => b.status === 'invoiced');
     const awaitingTotal = awaitingPayment.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0);
-    
     return {
-      tuningDays: bookings.filter(b => b.type?.startsWith('tuning')).length,
+      tuningDays: bookings.filter(b => b.type?.startsWith('tuning') || b.type === 'OTS' || b.type === 'TSC').length,
       faultDays: bookings.filter(b => b.type === 'fault').length,
-      bigDays: bookings.filter(b => b.type === 'big').length,
+      bigDays: bookings.filter(b => b.type === 'big' || b.type === 'project').length,
       needsInvoicing: completedJobs.length,
       uninvoicedTotal,
       awaitingPayment: awaitingPayment.length,
       awaitingTotal
     };
   };
-
   const stats = getStats();
 
   // ============================================================
@@ -696,38 +611,14 @@ const CommandCentre = () => {
         <div className="bg-white rounded-2xl p-8 max-w-lg w-full shadow-2xl">
           <h1 className="text-3xl font-bold mb-2">🎹 Command Centre</h1>
           <p className="text-gray-600 mb-6">Connect to your Google Sheets database</p>
-          
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Google Apps Script URL
-          </label>
-          <input
-            type="text"
-            value={configUrl}
-            onChange={(e) => setConfigUrl(e.target.value)}
-            placeholder="https://script.google.com/macros/s/..."
-            className="w-full p-4 text-lg border-2 rounded-lg mb-6"
-          />
-          
-          <button
-            onClick={() => {
-              if (configUrl) {
-                setApiUrl(configUrl);
-                setIsConfigured(true);
-              }
-            }}
-            className="w-full bg-blue-600 text-white py-4 rounded-lg text-xl font-bold hover:bg-blue-700"
-          >
-            Connect
-          </button>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Google Apps Script URL</label>
+          <input type="text" value={configUrl} onChange={(e) => setConfigUrl(e.target.value)} placeholder="https://script.google.com/macros/s/..." className="w-full p-4 text-lg border-2 rounded-lg mb-6" />
+          <button onClick={() => { if (configUrl) { setApiUrl(configUrl); setIsConfigured(true); } }} className="w-full bg-blue-600 text-white py-4 rounded-lg text-xl font-bold hover:bg-blue-700">Connect</button>
         </div>
       </div>
     );
   }
 
-  // ============================================================
-  // LOADING SCREEN
-  // ============================================================
-  
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
@@ -740,235 +631,532 @@ const CommandCentre = () => {
   }
 
   // ============================================================
-  // JOBS DUE PANEL (Left sidebar)
+  // REPORTS VIEW
   // ============================================================
   
-  const jobsDuePanelContent = (
+  const ReportsView = () => {
+    const [activeReport, setActiveReport] = useState('overview');
+    
+    return (
+      <div className="bg-white rounded-lg shadow-lg p-6">
+        {/* Report tabs */}
+        <div className="flex flex-wrap gap-2 mb-6 pb-4 border-b">
+          {[
+            { id: 'overview', label: '📊 Overview' },
+            { id: 'monthly', label: '📅 Monthly Income' },
+            { id: 'outstanding', label: '⏰ Outstanding' },
+            { id: 'needsInvoice', label: '📧 Needs Invoicing' },
+            { id: 'profitability', label: '💰 Profitability' },
+            { id: 'customers', label: '👥 Customers' },
+            { id: 'tunings', label: '🎹 Tunings' },
+            { id: 'utilisation', label: '📈 Utilisation' },
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveReport(tab.id)}
+              className={`px-4 py-2 rounded-lg font-medium ${activeReport === tab.id ? 'bg-blue-600 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        
+        {/* Overview */}
+        {activeReport === 'overview' && (
+          <div>
+            <h2 className="text-2xl font-bold mb-6">📊 Year to Date Overview</h2>
+            <div className="grid grid-cols-4 gap-4 mb-8">
+              <div className="bg-green-100 rounded-xl p-6 text-center">
+                <div className="text-4xl font-bold text-green-700">{formatCurrency(reportsData.ytdPaid)}</div>
+                <div className="text-green-600 font-medium">Paid</div>
+              </div>
+              <div className="bg-blue-100 rounded-xl p-6 text-center">
+                <div className="text-4xl font-bold text-blue-700">{formatCurrency(reportsData.ytdTotal)}</div>
+                <div className="text-blue-600 font-medium">Total Revenue</div>
+              </div>
+              <div className="bg-amber-100 rounded-xl p-6 text-center">
+                <div className="text-4xl font-bold text-amber-700">{reportsData.needsInvoicing.length}</div>
+                <div className="text-amber-600 font-medium">Needs Invoicing</div>
+              </div>
+              <div className="bg-red-100 rounded-xl p-6 text-center">
+                <div className="text-4xl font-bold text-red-700">{formatCurrency(reportsData.outstandingInvoices.reduce((s, i) => s + (parseFloat(i.price) || 0), 0))}</div>
+                <div className="text-red-600 font-medium">Outstanding</div>
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-3 gap-4 mb-8">
+              <div className="bg-purple-100 rounded-xl p-6 text-center">
+                <div className="text-4xl font-bold text-purple-700">{reportsData.totalHoursYTD.toFixed(0)}</div>
+                <div className="text-purple-600 font-medium">Hours Worked</div>
+              </div>
+              <div className="bg-indigo-100 rounded-xl p-6 text-center">
+                <div className="text-4xl font-bold text-indigo-700">{reportsData.bookedDays}</div>
+                <div className="text-indigo-600 font-medium">Days Booked</div>
+              </div>
+              <div className="bg-cyan-100 rounded-xl p-6 text-center">
+                <div className="text-4xl font-bold text-cyan-700">{reportsData.utilisation}%</div>
+                <div className="text-cyan-600 font-medium">Utilisation</div>
+              </div>
+            </div>
+            
+            <h3 className="text-xl font-bold mb-4">Revenue by Service Type</h3>
+            <div className="grid grid-cols-4 gap-3">
+              {Object.entries(reportsData.ytdByType).map(([type, data]) => (
+                <div key={type} className="bg-gray-50 rounded-lg p-4">
+                  <div className="font-medium text-gray-600">{getJobTypeLabel(type)}</div>
+                  <div className="text-2xl font-bold">{formatCurrency(data.revenue)}</div>
+                  <div className="text-sm text-gray-500">{data.count} jobs</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        
+        {/* Monthly Income */}
+        {activeReport === 'monthly' && (
+          <div>
+            <h2 className="text-2xl font-bold mb-6">📅 Monthly Income ({currentYear})</h2>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-gray-100">
+                    <th className="p-3 text-left">Month</th>
+                    <th className="p-3 text-right">Jobs</th>
+                    <th className="p-3 text-right">Invoiced</th>
+                    <th className="p-3 text-right">Paid</th>
+                    <th className="p-3 text-right">Outstanding</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {monthNames.map((name, idx) => {
+                    const data = reportsData.monthlyData[idx];
+                    return (
+                      <tr key={idx} className="border-b hover:bg-gray-50">
+                        <td className="p-3 font-medium">{name}</td>
+                        <td className="p-3 text-right">{data.count}</td>
+                        <td className="p-3 text-right">{formatCurrency(data.invoiced)}</td>
+                        <td className="p-3 text-right text-green-600 font-medium">{formatCurrency(data.paid)}</td>
+                        <td className="p-3 text-right text-red-600 font-medium">{data.outstanding > 0 ? formatCurrency(data.outstanding) : '-'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-gray-800 text-white font-bold">
+                    <td className="p-3">TOTAL</td>
+                    <td className="p-3 text-right">{Object.values(reportsData.monthlyData).reduce((s, m) => s + m.count, 0)}</td>
+                    <td className="p-3 text-right">{formatCurrency(Object.values(reportsData.monthlyData).reduce((s, m) => s + m.invoiced, 0))}</td>
+                    <td className="p-3 text-right">{formatCurrency(Object.values(reportsData.monthlyData).reduce((s, m) => s + m.paid, 0))}</td>
+                    <td className="p-3 text-right">{formatCurrency(Object.values(reportsData.monthlyData).reduce((s, m) => s + m.outstanding, 0))}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        )}
+        
+        {/* Outstanding Invoices */}
+        {activeReport === 'outstanding' && (
+          <div>
+            <h2 className="text-2xl font-bold mb-6">⏰ Outstanding Invoices ({reportsData.outstandingInvoices.length})</h2>
+            <div className="text-3xl font-bold text-red-600 mb-6">
+              Total: {formatCurrency(reportsData.outstandingInvoices.reduce((s, i) => s + (parseFloat(i.price) || 0), 0))}
+            </div>
+            {reportsData.outstandingInvoices.length === 0 ? (
+              <div className="text-center py-12 text-gray-400">
+                <div className="text-6xl mb-4">🎉</div>
+                <div className="text-xl">No outstanding invoices!</div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {reportsData.outstandingInvoices.map(inv => (
+                  <div key={inv.id} className={`p-4 rounded-lg border-l-4 ${inv.age > 60 ? 'bg-red-50 border-red-500' : inv.age > 30 ? 'bg-amber-50 border-amber-500' : 'bg-blue-50 border-blue-500'}`}>
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="font-bold text-lg">{inv.customerName}</div>
+                        <div className="text-sm text-gray-600">{formatDate(inv.date)} · {getJobTypeLabel(inv.type)}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-2xl font-bold">{formatCurrency(inv.price)}</div>
+                        <div className={`text-sm font-medium ${inv.age > 60 ? 'text-red-600' : inv.age > 30 ? 'text-amber-600' : 'text-blue-600'}`}>
+                          {inv.age} days old
+                        </div>
+                      </div>
+                    </div>
+                    <button onClick={() => updateBookingStatus(inv.id, 'paid')} className="mt-2 px-4 py-2 bg-green-500 text-white rounded-lg text-sm font-medium">💷 Mark Paid</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* Needs Invoicing */}
+        {activeReport === 'needsInvoice' && (
+          <div>
+            <h2 className="text-2xl font-bold mb-6">📧 Needs Invoicing ({reportsData.needsInvoicing.length})</h2>
+            {reportsData.needsInvoicing.length === 0 ? (
+              <div className="text-center py-12 text-gray-400">
+                <div className="text-6xl mb-4">✅</div>
+                <div className="text-xl">All jobs invoiced!</div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {reportsData.needsInvoicing.map(job => (
+                  <div key={job.id} className="p-4 rounded-lg bg-amber-50 border-l-4 border-amber-500">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="font-bold text-lg">{job.customerName}</div>
+                        <div className="text-sm text-gray-600">{formatDate(job.date)} · {getJobTypeLabel(job.type)}</div>
+                        {job.notes && <div className="text-sm italic mt-1">{job.notes}</div>}
+                      </div>
+                      <div className="text-right">
+                        {job.actualHours && <div className="text-sm text-gray-600">{job.actualHours} hours</div>}
+                        <button
+                          onClick={() => {
+                            const customer = getCustomerById(job.customerId);
+                            const distance = customer?.distance || 0;
+                            const actualHours = parseFloat(job.actualHours) || 0;
+                            setSelectedBand(Math.max(4, Math.ceil(actualHours)));
+                            setInvoiceMaterials([]);
+                            setCustomAmount('');
+                            setSelectedDistance(null);
+                            setShowInvoiceCalc({ ...job, distance, actualHours });
+                          }}
+                          className="mt-2 px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium"
+                        >
+                          📧 Create Invoice
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* Profitability */}
+        {activeReport === 'profitability' && (
+          <div>
+            <h2 className="text-2xl font-bold mb-6">💰 Project Profitability</h2>
+            {reportsData.projectProfitability.length === 0 ? (
+              <div className="text-center py-12 text-gray-400">
+                <div className="text-6xl mb-4">📊</div>
+                <div className="text-xl">No active projects with tracked time</div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {reportsData.projectProfitability.map(p => (
+                  <div key={p.id} className={`p-4 rounded-lg border-2 ${p.variance >= 0 ? 'bg-green-50 border-green-300' : 'bg-red-50 border-red-300'}`}>
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <div className="text-sm text-gray-600">{p.customerName}</div>
+                        <div className="font-bold text-xl">{p.name}</div>
+                      </div>
+                      <div className={`text-2xl font-bold ${p.variance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        {p.variance >= 0 ? '+' : ''}{formatCurrency(p.variance)}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-4 gap-4 text-sm">
+                      <div>
+                        <div className="text-gray-500">Hours</div>
+                        <div className="font-bold">{p.totalHours.toFixed(1)}</div>
+                      </div>
+                      <div>
+                        <div className="text-gray-500">Labour</div>
+                        <div className="font-bold">{formatCurrency(p.labourCost)}</div>
+                      </div>
+                      <div>
+                        <div className="text-gray-500">Materials</div>
+                        <div className="font-bold">{formatCurrency(p.materialsCost)}</div>
+                      </div>
+                      <div>
+                        <div className="text-gray-500">Total Cost</div>
+                        <div className="font-bold">{formatCurrency(p.totalCost)}</div>
+                      </div>
+                    </div>
+                    {p.estimatedDays && (
+                      <div className="mt-2 text-sm text-gray-600">
+                        Estimated: {p.estimatedDays} days ({formatCurrency(p.estimatedValue)}) · Actual: {p.days.length} days
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* Customer Revenue */}
+        {activeReport === 'customers' && (
+          <div>
+            <h2 className="text-2xl font-bold mb-6">👥 Top Customers by Revenue</h2>
+            <div className="space-y-2">
+              {reportsData.topCustomers.map((c, idx) => (
+                <div key={c.id} className="flex items-center p-3 rounded-lg bg-gray-50 hover:bg-gray-100">
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white ${idx < 3 ? 'bg-yellow-500' : idx < 10 ? 'bg-blue-500' : 'bg-gray-400'}`}>
+                    {idx + 1}
+                  </div>
+                  <div className="ml-4 flex-1">
+                    <div className="font-medium">{c.name}</div>
+                    <div className="text-sm text-gray-500">{c.count} jobs</div>
+                  </div>
+                  <div className="text-xl font-bold text-green-600">{formatCurrency(c.total)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        
+        {/* Tunings */}
+        {activeReport === 'tunings' && (
+          <div>
+            <h2 className="text-2xl font-bold mb-6">🎹 Tuning Schedule ({currentYear})</h2>
+            
+            <div className="grid grid-cols-6 gap-3 mb-8">
+              {reportsData.tuningSchedule.map((m, idx) => {
+                const now = new Date();
+                const isPast = idx < now.getMonth();
+                const isCurrent = idx === now.getMonth();
+                return (
+                  <div key={m.month} className={`p-4 rounded-lg text-center ${isCurrent ? 'bg-blue-100 border-2 border-blue-500' : isPast ? 'bg-gray-100' : 'bg-green-50'}`}>
+                    <div className="font-bold">{m.month.slice(0, 3)}</div>
+                    <div className="text-2xl font-bold">{m.booked}/{m.total}</div>
+                    {m.remaining > 0 && isPast && (
+                      <div className="text-red-600 text-sm font-medium">{m.remaining} overdue</div>
+                    )}
+                    {m.remaining > 0 && !isPast && (
+                      <div className="text-amber-600 text-sm">{m.remaining} left</div>
+                    )}
+                    {m.remaining === 0 && m.total > 0 && (
+                      <div className="text-green-600 text-sm">✓ Done</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            
+            {reportsData.overdueTunings.length > 0 && (
+              <>
+                <h3 className="text-xl font-bold mb-4 text-red-600">⚠️ Overdue Tunings ({reportsData.overdueTunings.length})</h3>
+                <div className="space-y-2">
+                  {reportsData.overdueTunings.map((item, idx) => (
+                    <div key={idx} className="flex justify-between items-center p-3 bg-red-50 rounded-lg border-l-4 border-red-500">
+                      <div>
+                        <div className="font-bold">{item.customer.name}</div>
+                        <div className="text-sm text-gray-600">Due: {item.dueMonth}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-red-600 font-bold">{item.monthsOverdue} months overdue</div>
+                        <button
+                          onClick={() => {
+                            setSelectedCustomerToBook(item.customer);
+                            setBookingType('OTS');
+                            setView('planner');
+                          }}
+                          className="text-sm text-blue-600 hover:underline"
+                        >
+                          Book now →
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+        
+        {/* Utilisation */}
+        {activeReport === 'utilisation' && (
+          <div>
+            <h2 className="text-2xl font-bold mb-6">📈 Utilisation ({currentYear})</h2>
+            
+            <div className="grid grid-cols-3 gap-6 mb-8">
+              <div className="bg-gray-100 rounded-xl p-6 text-center">
+                <div className="text-5xl font-bold text-gray-700">{reportsData.availableDays}</div>
+                <div className="text-gray-600 font-medium">Available Days</div>
+                <div className="text-sm text-gray-500">(Mon-Wed minus holidays)</div>
+              </div>
+              <div className="bg-blue-100 rounded-xl p-6 text-center">
+                <div className="text-5xl font-bold text-blue-700">{reportsData.bookedDays}</div>
+                <div className="text-blue-600 font-medium">Booked Days</div>
+              </div>
+              <div className={`rounded-xl p-6 text-center ${reportsData.utilisation >= 80 ? 'bg-green-100' : reportsData.utilisation >= 50 ? 'bg-amber-100' : 'bg-red-100'}`}>
+                <div className={`text-5xl font-bold ${reportsData.utilisation >= 80 ? 'text-green-700' : reportsData.utilisation >= 50 ? 'text-amber-700' : 'text-red-700'}`}>{reportsData.utilisation}%</div>
+                <div className={`font-medium ${reportsData.utilisation >= 80 ? 'text-green-600' : reportsData.utilisation >= 50 ? 'text-amber-600' : 'text-red-600'}`}>Utilisation</div>
+              </div>
+            </div>
+            
+            <h3 className="text-xl font-bold mb-4">Hours by Month</h3>
+            <div className="grid grid-cols-12 gap-2">
+              {monthNames.map((name, idx) => {
+                const hours = reportsData.hoursByMonth[idx] || 0;
+                const maxHours = Math.max(...Object.values(reportsData.hoursByMonth), 1);
+                const height = Math.max(20, (hours / maxHours) * 150);
+                return (
+                  <div key={idx} className="text-center">
+                    <div className="flex flex-col items-center justify-end" style={{ height: 170 }}>
+                      <div className="text-xs font-medium mb-1">{hours.toFixed(0)}h</div>
+                      <div className="w-full bg-blue-500 rounded-t" style={{ height }}></div>
+                    </div>
+                    <div className="text-xs mt-1">{name.slice(0, 3)}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ============================================================
+  // PROJECT SUMMARY MODAL
+  // ============================================================
+  
+  const ProjectSummaryModal = ({ project, onClose }) => {
+    if (!project) return null;
+    const hourlyRate = 45;
+    const labourCost = project.totalHours * hourlyRate;
+    const totalCost = labourCost + project.materialsCost;
+    
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+          <div className="flex justify-between items-start mb-4">
+            <div>
+              <div className="text-sm text-gray-500">{project.customerName}</div>
+              <h2 className="text-2xl font-bold">{project.name}</h2>
+            </div>
+            <button onClick={onClose} className="text-2xl text-gray-400 hover:text-gray-600">×</button>
+          </div>
+          
+          <div className="grid grid-cols-3 gap-4 mb-6">
+            <div className="bg-purple-100 rounded-lg p-4 text-center">
+              <div className="text-3xl font-bold text-purple-700">{project.days.length}</div>
+              <div className="text-sm text-purple-600">Days Allocated</div>
+              {project.estimatedDays && <div className="text-xs text-purple-500">of {project.estimatedDays} est.</div>}
+            </div>
+            <div className="bg-blue-100 rounded-lg p-4 text-center">
+              <div className="text-3xl font-bold text-blue-700">{project.totalHours.toFixed(1)}</div>
+              <div className="text-sm text-blue-600">Hours Tracked</div>
+            </div>
+            <div className="bg-green-100 rounded-lg p-4 text-center">
+              <div className="text-3xl font-bold text-green-700">{formatCurrency(project.materialsCost)}</div>
+              <div className="text-sm text-green-600">Materials</div>
+            </div>
+          </div>
+          
+          <div className="bg-gray-100 rounded-lg p-4 mb-6">
+            <h3 className="font-bold mb-3">💰 Cost Breakdown</h3>
+            <div className="space-y-2">
+              <div className="flex justify-between"><span>Labour ({project.totalHours.toFixed(1)} hrs × £{hourlyRate})</span><span className="font-medium">{formatCurrency(labourCost)}</span></div>
+              <div className="flex justify-between"><span>Materials</span><span className="font-medium">{formatCurrency(project.materialsCost)}</span></div>
+              <div className="flex justify-between pt-2 border-t font-bold text-lg"><span>Total Cost</span><span className="text-green-600">{formatCurrency(totalCost)}</span></div>
+            </div>
+          </div>
+          
+          <div className="flex gap-3 pt-4 border-t">
+            <button onClick={() => { setAllocatingProject(project); onClose(); }} className="flex-1 py-3 bg-purple-500 text-white rounded-lg font-medium">📅 Allocate Days</button>
+            <button onClick={() => deleteProject(project.id)} className="px-6 py-3 bg-red-100 text-red-600 rounded-lg font-medium hover:bg-red-200">🗑️ Delete</button>
+            <button onClick={onClose} className="px-6 py-3 bg-gray-200 rounded-lg font-medium">Close</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ============================================================
+  // LEFT PANEL (Jobs Due)
+  // ============================================================
+  
+  const JobsDuePanel = () => (
     <div className="w-80 bg-white rounded-lg shadow-xl p-4 flex flex-col h-full no-print">
-      
-      {/* BOOKING CONFIRMATION - Always at top when active */}
       {selectedCustomerToBook && (
         <div className={`border-2 rounded-lg p-4 mb-3 booking-highlight ${selectedTicketToBook ? 'bg-orange-100 border-orange-500' : 'bg-green-100 border-green-500'}`}>
-          <div className={`font-bold text-lg ${selectedTicketToBook ? 'text-orange-800' : 'text-green-800'}`}>
-            {selectedTicketToBook ? '🔧 Booking Fault:' : '📍 Booking:'}
-          </div>
+          <div className={`font-bold text-lg ${selectedTicketToBook ? 'text-orange-800' : 'text-green-800'}`}>{selectedTicketToBook ? '🔧 Booking Fault:' : '📍 Booking:'}</div>
           <div className={`font-medium text-lg ${selectedTicketToBook ? 'text-orange-700' : 'text-green-700'}`}>{selectedCustomerToBook.name}</div>
-          {selectedTicketToBook && (
-            <div className="text-sm text-orange-600 mt-1">"{selectedTicketToBook.description}"</div>
-          )}
+          {selectedTicketToBook && <div className="text-sm text-orange-600 mt-1">"{selectedTicketToBook.description}"</div>}
           
           <div className="grid grid-cols-3 gap-2 mt-3">
-            {[
-              { type: 'OTS', label: 'OTS', desc: 'With helper' },
-              { type: 'TSC', label: 'Solo', desc: 'Just me' },
-              { type: 'WS', label: 'Workshop', desc: 'No travel' }
-            ].map(item => (
-              <button
-                key={item.type}
-                onClick={() => setBookingType(item.type)}
-                className={`py-3 rounded-lg text-sm font-medium touch-target ${
-                  bookingType === item.type 
-                    ? 'bg-blue-500 text-white'
-                    : 'bg-gray-200'
-                }`}
-              >
-                {item.label}<br/>
-                <span className="text-xs opacity-75">{item.desc}</span>
+            {[{ type: 'OTS', label: 'OTS', desc: 'With helper' }, { type: 'TSC', label: 'Solo', desc: 'Just me' }, { type: 'WS', label: 'Workshop', desc: 'No travel' }].map(item => (
+              <button key={item.type} onClick={() => setBookingType(item.type)} className={`py-3 rounded-lg text-sm font-medium touch-target ${bookingType === item.type ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}>
+                {item.label}<br/><span className="text-xs opacity-75">{item.desc}</span>
               </button>
             ))}
           </div>
           
-          {bookingType === 'big' && (
-            <div className="mt-3">
-              <label className="text-sm text-gray-600">Quote amount:</label>
-              <div className="relative">
-                <span className="absolute left-3 top-3 text-gray-500">£</span>
-                <input
-                  type="number"
-                  value={customQuote}
-                  onChange={(e) => setCustomQuote(e.target.value)}
-                  className="w-full p-3 pl-7 border rounded-lg"
-                  placeholder="Enter quote"
-                />
-              </div>
-            </div>
-          )}
-          
           <div className="mt-3">
             <label className="text-sm text-gray-600">Job notes (optional):</label>
-            <input
-              type="text"
-              value={jobNotes}
-              onChange={(e) => setJobNotes(e.target.value)}
-              className="w-full p-3 border rounded-lg text-sm"
-              placeholder="e.g. Fix cipher, service swell"
-            />
+            <input type="text" value={jobNotes} onChange={(e) => setJobNotes(e.target.value)} className="w-full p-3 border rounded-lg text-sm" placeholder="e.g. Fix cipher, service swell" />
           </div>
           
-          {/* ADHD: Very clear next step instruction */}
-          <div className={`text-lg mt-4 font-bold text-center p-3 rounded-lg ${selectedTicketToBook ? 'text-orange-700 bg-orange-200' : 'text-green-700 bg-green-200'}`}>
-            👆 Now tap a day on the calendar
-          </div>
-          
-          <button
-            onClick={() => { setSelectedCustomerToBook(null); setSelectedTicketToBook(null); setCustomQuote(''); setJobNotes(''); }}
-            className="w-full mt-3 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target"
-          >
-            Cancel
-          </button>
+          <div className={`text-lg mt-4 font-bold text-center p-3 rounded-lg ${selectedTicketToBook ? 'text-orange-700 bg-orange-200' : 'text-green-700 bg-green-200'}`}>👆 Now tap a day on the calendar</div>
+          <button onClick={() => { setSelectedCustomerToBook(null); setSelectedTicketToBook(null); setCustomQuote(''); setJobNotes(''); }} className="w-full mt-3 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target">Cancel</button>
         </div>
       )}
       
-      {/* INBOX - Faults and requests */}
       {(tickets.length > 0 || showAddTicket) && (
         <div className="mb-4 pb-4 border-b-2">
-          <div className="flex justify-between items-center mb-2">
-            <h2 className="text-lg font-bold">📥 Inbox ({tickets.length})</h2>
-          </div>
-          
+          <h2 className="text-lg font-bold mb-2">📥 Inbox ({tickets.length})</h2>
           {tickets.map(ticket => {
             const customer = getCustomerById(ticket.customerId);
             const isSelected = selectedTicketToBook?.id === ticket.id;
             const age = Math.floor((new Date() - new Date(ticket.createdAt)) / (1000 * 60 * 60 * 24));
-            
             return (
-              <div
-                key={ticket.id}
-                onClick={() => selectTicketToBook(ticket)}
-                className={`p-3 rounded-lg cursor-pointer mb-2 border-2 ${
-                  isSelected 
-                    ? 'bg-orange-100 border-orange-500 ring-4 ring-orange-300' 
-                    : 'bg-red-50 border-red-300 hover:border-orange-400'
-                }`}
-              >
+              <div key={ticket.id} onClick={() => selectTicketToBook(ticket)} className={`p-3 rounded-lg cursor-pointer mb-2 border-2 ${isSelected ? 'bg-orange-100 border-orange-500 ring-4 ring-orange-300' : 'bg-red-50 border-red-300 hover:border-orange-400'}`}>
                 <div className="flex justify-between items-start">
                   <div className="font-bold">{customer?.name || 'Unknown'}</div>
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); deleteTicket(ticket.id); }}
-                    className="text-gray-400 hover:text-red-500 text-sm"
-                  >✕</button>
+                  <button onClick={(e) => { e.stopPropagation(); deleteTicket(ticket.id); }} className="text-gray-400 hover:text-red-500 text-sm">✕</button>
                 </div>
                 <div className="text-sm text-gray-700">{ticket.description}</div>
-                <div className="text-xs text-gray-400 mt-1">
-                  {age === 0 ? 'Today' : age === 1 ? 'Yesterday' : `${age} days ago`}
-                </div>
+                <div className="text-xs text-gray-400 mt-1">{formatDate(ticket.createdAt)} · {age === 0 ? 'Today' : age === 1 ? 'Yesterday' : `${age} days ago`}</div>
               </div>
             );
           })}
         </div>
       )}
       
-      {/* Add ticket form */}
       {showAddTicket && (
         <div className="mb-4 pb-4 border-b-2 bg-yellow-50 p-3 rounded-lg">
           <div className="font-bold mb-2">New Request</div>
-          <input
-            type="text"
-            placeholder="Search customer..."
-            value={customerSearch}
-            onChange={(e) => setCustomerSearch(e.target.value)}
-            className="w-full p-2 border rounded mb-2 text-sm"
-          />
+          <input type="text" placeholder="Search customer..." value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} className="w-full p-2 border rounded mb-2 text-sm" />
           {customerSearch && (
             <div className="max-h-32 overflow-y-auto mb-2 bg-white border rounded">
-              {customers
-                .filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase()))
-                .slice(0, 5)
-                .map(c => (
-                  <div
-                    key={c.id}
-                    onClick={() => { setNewTicketCustomer(c.id); setCustomerSearch(c.name); }}
-                    className={`p-2 cursor-pointer hover:bg-blue-50 text-sm ${newTicketCustomer === c.id ? 'bg-blue-100' : ''}`}
-                  >
-                    {c.name}
-                  </div>
-                ))}
+              {customers.filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase())).slice(0, 5).map(c => (
+                <div key={c.id} onClick={() => { setNewTicketCustomer(c.id); setCustomerSearch(c.name); }} className={`p-2 cursor-pointer hover:bg-blue-50 text-sm ${newTicketCustomer === c.id ? 'bg-blue-100' : ''}`}>{c.name}</div>
+              ))}
             </div>
           )}
-          <input
-            type="text"
-            placeholder="What's the problem?"
-            value={newTicketDescription}
-            onChange={(e) => setNewTicketDescription(e.target.value)}
-            className="w-full p-2 border rounded mb-2 text-sm"
-          />
+          <input type="text" placeholder="What's the problem?" value={newTicketDescription} onChange={(e) => setNewTicketDescription(e.target.value)} className="w-full p-2 border rounded mb-2 text-sm" />
           <div className="flex gap-2">
-            <button
-              onClick={addTicket}
-              disabled={!newTicketCustomer || !newTicketDescription}
-              className="flex-1 py-2 bg-green-500 text-white rounded font-medium disabled:opacity-50"
-            >
-              Save
-            </button>
-            <button
-              onClick={() => { setShowAddTicket(false); setNewTicketCustomer(''); setNewTicketDescription(''); setCustomerSearch(''); }}
-              className="flex-1 py-2 bg-gray-300 rounded font-medium"
-            >
-              Cancel
-            </button>
+            <button onClick={addTicket} disabled={!newTicketCustomer || !newTicketDescription} className="flex-1 py-2 bg-green-500 text-white rounded font-medium disabled:opacity-50">Save</button>
+            <button onClick={() => { setShowAddTicket(false); setNewTicketCustomer(''); setNewTicketDescription(''); setCustomerSearch(''); }} className="flex-1 py-2 bg-gray-300 rounded font-medium">Cancel</button>
           </div>
         </div>
       )}
 
-      {/* Add request button */}
       {!showAddTicket && !selectedCustomerToBook && !allocatingProject && (
-        <button
-          onClick={() => setShowAddTicket(true)}
-          className="w-full py-3 mb-3 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg font-medium touch-target border-2 border-red-300"
-        >
-          + Log Fault / Request
-        </button>
+        <button onClick={() => setShowAddTicket(true)} className="w-full py-3 mb-3 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg font-medium touch-target border-2 border-red-300">+ Log Fault / Request</button>
       )}
 
-      {/* Projects section */}
       <div className="mb-4">
         <div className="flex justify-between items-center mb-2">
           <h2 className="text-lg font-bold">🔧 Big Jobs</h2>
-          {!allocatingProject && (
-            <button
-              onClick={() => setShowNewProject(true)}
-              className="text-sm bg-purple-100 hover:bg-purple-200 text-purple-700 px-3 py-1 rounded"
-            >
-              + New
-            </button>
-          )}
+          {!allocatingProject && <button onClick={() => setShowNewProject(true)} className="text-sm bg-purple-100 hover:bg-purple-200 text-purple-700 px-3 py-1 rounded">+ New</button>}
         </div>
         
-        {/* New project form */}
         {showNewProject && (
           <div className="bg-purple-50 border-2 border-purple-300 rounded-lg p-3 mb-2">
-            {/* Customer search */}
             <div className="relative mb-2">
-              <input
-                type="text"
-                placeholder="Search customer..."
-                value={projectCustomerSearch}
-                onChange={(e) => {
-                  setProjectCustomerSearch(e.target.value);
-                  setNewProjectCustomer(null);
-                }}
-                className="w-full p-2 border rounded"
-              />
+              <input type="text" placeholder="Search customer..." value={projectCustomerSearch} onChange={(e) => { setProjectCustomerSearch(e.target.value); setNewProjectCustomer(null); }} className="w-full p-2 border rounded" />
               {projectCustomerSearch && !newProjectCustomer && (
                 <div className="absolute top-full left-0 right-0 bg-white border rounded-b shadow-lg max-h-40 overflow-y-auto z-10">
-                  {customers
-                    .filter(c => c.name.toLowerCase().includes(projectCustomerSearch.toLowerCase()))
-                    .slice(0, 10)
-                    .map(c => (
-                      <div
-                        key={c.id}
-                        onClick={() => {
-                          setNewProjectCustomer(c);
-                          setProjectCustomerSearch(c.name);
-                        }}
-                        className="p-2 hover:bg-purple-50 cursor-pointer border-b"
-                      >
-                        {c.name}
-                      </div>
-                    ))}
-                  {customers.filter(c => c.name.toLowerCase().includes(projectCustomerSearch.toLowerCase())).length === 0 && (
-                    <div className="p-2 text-gray-400">No matches</div>
-                  )}
+                  {customers.filter(c => c.name.toLowerCase().includes(projectCustomerSearch.toLowerCase())).slice(0, 10).map(c => (
+                    <div key={c.id} onClick={() => { setNewProjectCustomer(c); setProjectCustomerSearch(c.name); }} className="p-2 hover:bg-purple-50 cursor-pointer border-b">{c.name}</div>
+                  ))}
                 </div>
               )}
             </div>
@@ -978,135 +1166,66 @@ const CommandCentre = () => {
                 <button onClick={() => { setNewProjectCustomer(null); setProjectCustomerSearch(''); }} className="text-gray-500">✕</button>
               </div>
             )}
-            <input
-              type="text"
-              placeholder="Project name..."
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              className="w-full p-2 border rounded mb-2"
-            />
-            <input
-              type="number"
-              placeholder="Estimated days (optional)"
-              value={newProjectEstDays}
-              onChange={(e) => setNewProjectEstDays(e.target.value)}
-              className="w-full p-2 border rounded mb-2"
-            />
+            <input type="text" placeholder="Project name..." value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} className="w-full p-2 border rounded mb-2" />
+            <input type="number" placeholder="Estimated days (optional)" value={newProjectEstDays} onChange={(e) => setNewProjectEstDays(e.target.value)} className="w-full p-2 border rounded mb-2" />
             <div className="flex gap-2">
-              <button
-                onClick={() => { setShowNewProject(false); setNewProjectName(''); setNewProjectCustomer(null); setProjectCustomerSearch(''); setNewProjectEstDays(''); }}
-                className="flex-1 py-2 bg-gray-200 rounded"
-              >Cancel</button>
-              <button
-                onClick={createProject}
-                disabled={!newProjectName || !newProjectCustomer}
-                className="flex-1 py-2 bg-purple-500 text-white rounded disabled:opacity-50"
-              >Start Allocating</button>
+              <button onClick={() => { setShowNewProject(false); setNewProjectName(''); setNewProjectCustomer(null); setProjectCustomerSearch(''); setNewProjectEstDays(''); }} className="flex-1 py-2 bg-gray-200 rounded">Cancel</button>
+              <button onClick={createProject} disabled={!newProjectName || !newProjectCustomer} className="flex-1 py-2 bg-purple-500 text-white rounded disabled:opacity-50">Start Allocating</button>
             </div>
           </div>
         )}
         
-        {/* Allocation mode banner */}
         {allocatingProject && (
           <div className="bg-purple-500 text-white rounded-lg p-3 mb-2">
             <div className="font-bold">📍 Allocating Days</div>
             <div className="text-sm opacity-80">{allocatingProject.customerName}</div>
             <div className="font-medium">{allocatingProject.name}</div>
-            {allocatingProject.estimatedDays && (
-              <div className="text-sm mt-1">
-                {bookings.filter(b => b.type === 'project' && b.projectId === allocatingProject.id).length} of {allocatingProject.estimatedDays} days
-              </div>
-            )}
+            {allocatingProject.estimatedDays && <div className="text-sm mt-1">{bookings.filter(b => b.type === 'project' && b.projectId === allocatingProject.id).length} of {allocatingProject.estimatedDays} days</div>}
             <div className="text-xs mt-2 opacity-80">Tap days to add/remove</div>
-            <button
-              onClick={() => setAllocatingProject(null)}
-              className="mt-2 w-full py-2 bg-white text-purple-700 rounded font-medium"
-            >
-              Done
-            </button>
+            <button onClick={() => setAllocatingProject(null)} className="mt-2 w-full py-2 bg-white text-purple-700 rounded font-medium">Done</button>
           </div>
         )}
         
-        {/* Active projects list */}
         {!showNewProject && !allocatingProject && activeProjects.length > 0 && (
-          <div className="space-y-2">
+          <div className="space-y-2 max-h-48 overflow-y-auto scroll-panel">
             {activeProjects.map(project => (
-              <div
-                key={project.id}
-                onClick={() => setAllocatingProject(project)}
-                className="bg-purple-50 border-2 border-purple-200 rounded-lg p-3 cursor-pointer hover:border-purple-400"
-              >
+              <div key={project.id} onClick={() => setShowProjectSummary(project)} className="bg-purple-50 border-2 border-purple-200 rounded-lg p-3 cursor-pointer hover:border-purple-400">
                 <div className="text-sm text-gray-600">{project.customerName}</div>
                 <div className="font-medium">{project.name}</div>
-                <div className="text-sm text-purple-600">
-                  {project.estimatedDays 
-                    ? `${project.days.length} of ${project.estimatedDays} days`
-                    : `${project.days.length} days allocated`
-                  }
+                <div className="flex justify-between items-center mt-1">
+                  <span className="text-sm text-purple-600">{project.estimatedDays ? `${project.days.length}/${project.estimatedDays} days` : `${project.days.length} days`}</span>
+                  {project.totalHours > 0 && <span className="text-xs text-blue-600">{project.totalHours.toFixed(1)}h tracked</span>}
                 </div>
               </div>
             ))}
           </div>
         )}
         
-        {!showNewProject && !allocatingProject && activeProjects.length === 0 && (
-          <div className="text-gray-400 text-sm">No active projects</div>
-        )}
+        {!showNewProject && !allocatingProject && activeProjects.length === 0 && <div className="text-gray-400 text-sm">No active projects</div>}
       </div>
 
       <h2 className="text-xl font-bold mb-3">📋 Tunings Due</h2>
-
-      <div className="flex-1 overflow-y-auto space-y-2">
+      <div className="flex-1 overflow-y-auto space-y-2 scroll-panel">
         {jobsDue.length === 0 ? (
-          <div className="text-center py-8">
-            <div className="text-5xl mb-3">🎉</div>
-            <p className="text-gray-500 text-lg">All caught up!</p>
-          </div>
+          <div className="text-center py-8"><div className="text-5xl mb-3">🎉</div><p className="text-gray-500 text-lg">All caught up!</p></div>
         ) : (
           jobsDue.map((item, idx) => (
-            <div
-              key={idx}
-              onClick={() => {
-                setSelectedCustomerToBook(item.customer);
-                setBookingType('OTS');
-                setCustomQuote('');
-                setJobNotes('');
-              }}
-              className={`p-4 rounded-lg cursor-pointer transition-all touch-target ${
-                item.urgent ? 'bg-amber-50 border-2 border-amber-400' : 'bg-gray-50 border-2 border-gray-200'
-              } ${selectedCustomerToBook?.id === item.customer.id ? 'ring-4 ring-green-500' : 'hover:border-blue-400'}`}
-            >
+            <div key={idx} onClick={() => { setSelectedCustomerToBook(item.customer); setBookingType('OTS'); setCustomQuote(''); setJobNotes(''); }}
+              className={`p-4 rounded-lg cursor-pointer transition-all touch-target ${item.urgent ? 'bg-amber-50 border-2 border-amber-400' : 'bg-gray-50 border-2 border-gray-200'} ${selectedCustomerToBook?.id === item.customer.id ? 'ring-4 ring-green-500' : 'hover:border-blue-400'}`}>
               <div className="font-bold text-lg">{item.customer.name}</div>
               <div className="flex justify-between items-center mt-1">
-                <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>
-                  {item.monthName} {item.urgent && '⚠️'}
-                </span>
-                {getLastTuningPrice(item.customer.id) && (
-                  <span className="text-sm text-gray-400">
-                    Last: £{getLastTuningPrice(item.customer.id)}
-                  </span>
-                )}
+                <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{item.monthName} {item.urgent && '⚠️'}</span>
+                {getLastTuningPrice(item.customer.id) && <span className="text-sm text-gray-400">Last: £{getLastTuningPrice(item.customer.id)}</span>}
               </div>
             </div>
           ))
         )}
       </div>
 
-      {/* Action alerts */}
       {(stats.needsInvoicing > 0 || stats.awaitingPayment > 0) && (
         <div className="mt-4 pt-4 border-t space-y-2">
-          {stats.needsInvoicing > 0 && (
-            <div className="bg-amber-100 p-3 rounded-lg">
-              <div className="font-bold text-amber-800">📧 {stats.needsInvoicing} need invoicing</div>
-              <div className="text-amber-700">£{stats.uninvoicedTotal.toLocaleString()}</div>
-            </div>
-          )}
-          {stats.awaitingPayment > 0 && (
-            <div className="bg-blue-100 p-3 rounded-lg">
-              <div className="font-bold text-blue-800">💷 {stats.awaitingPayment} awaiting payment</div>
-              <div className="text-blue-700">£{stats.awaitingTotal.toLocaleString()}</div>
-            </div>
-          )}
+          {stats.needsInvoicing > 0 && <div className="bg-amber-100 p-3 rounded-lg"><div className="font-bold text-amber-800">📧 {stats.needsInvoicing} need invoicing</div><div className="text-amber-700">£{stats.uninvoicedTotal.toLocaleString()}</div></div>}
+          {stats.awaitingPayment > 0 && <div className="bg-blue-100 p-3 rounded-lg"><div className="font-bold text-blue-800">💷 {stats.awaitingPayment} awaiting payment</div><div className="text-blue-700">£{stats.awaitingTotal.toLocaleString()}</div></div>}
         </div>
       )}
     </div>
@@ -1122,21 +1241,16 @@ const CommandCentre = () => {
         <thead className="sticky top-0 bg-gray-800 text-white">
           <tr>
             <th className="p-3 text-left text-lg w-32">{currentYear}</th>
-            {[...Array(31)].map((_, i) => (
-              <th key={i} className="p-1 text-center text-sm font-medium">{i + 1}</th>
-            ))}
+            {[...Array(31)].map((_, i) => <th key={i} className="p-1 text-center text-sm font-medium">{i + 1}</th>)}
           </tr>
         </thead>
         <tbody>
           {plannerMonths.map((monthData, monthIdx) => (
             <tr key={monthIdx} className="border-b">
-              <td className="p-3 font-bold border-r bg-gray-50 text-lg">
-                {monthData.name}
-              </td>
+              <td className="p-3 font-bold border-r bg-gray-50 text-lg">{monthData.name}</td>
               {[...Array(31)].map((_, dayIdx) => {
                 const day = dayIdx + 1;
                 if (day > monthData.days) return <td key={dayIdx} className="bg-gray-200"></td>;
-
                 const dateStr = getDateString(monthData.year, monthData.month, day);
                 const isWork = isWorkDay(monthData.year, monthData.month, day);
                 const isOff = isDayOff(dateStr);
@@ -1158,18 +1272,9 @@ const CommandCentre = () => {
                 else cellClass += isSelecting ? 'bg-green-200 hover:bg-green-300' : 'bg-green-50 hover:bg-green-100';
 
                 return (
-                  <td
-                    key={dayIdx}
-                    onClick={() => handleDayClick(dateStr, monthData.year, monthData.month, day)}
-                    className={cellClass}
-                  >
+                  <td key={dayIdx} onClick={() => handleDayClick(dateStr, monthData.year, monthData.month, day)} className={cellClass}>
                     <div className="w-8 h-8 flex items-center justify-center mx-auto text-sm font-bold">
-                      {hasBooking ? (
-                        dayBookings.length > 1 ? dayBookings.length : 
-                        firstBookingType === 'project' ? 'P' :
-                        firstBookingType?.startsWith('tuning') ? 'T' : 
-                        firstBookingType === 'fault' ? 'F' : 'B'
-                      ) : isWork && !isOff ? '·' : ''}
+                      {hasBooking ? (dayBookings.length > 1 ? dayBookings.length : firstBookingType === 'project' ? 'P' : firstBookingType?.startsWith('tuning') ? 'T' : firstBookingType === 'fault' ? 'F' : 'B') : isWork && !isOff ? '·' : ''}
                     </div>
                   </td>
                 );
@@ -1178,7 +1283,6 @@ const CommandCentre = () => {
           ))}
         </tbody>
       </table>
-      
       <div className="flex gap-6 p-4 bg-gray-100 border-t text-sm flex-wrap">
         <div className="flex items-center gap-2"><div className="w-6 h-6 bg-blue-500 rounded"></div> Tuning</div>
         <div className="flex items-center gap-2"><div className="w-6 h-6 bg-orange-400 rounded"></div> Fault</div>
@@ -1191,7 +1295,7 @@ const CommandCentre = () => {
   );
 
   // ============================================================
-  // DAY PANEL (when clicking a day)
+  // DAY PANEL
   // ============================================================
   
   const DayPanel = ({ date, onClose }) => {
@@ -1204,20 +1308,13 @@ const CommandCentre = () => {
         <div className="flex justify-between items-start mb-4">
           <div>
             <h2 className="text-2xl font-bold">{dayNames[d.getDay()]}</h2>
-            <p className="text-lg text-gray-500">
-              {d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
-            </p>
+            <p className="text-lg text-gray-500">{d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-3xl p-2 touch-target">✕</button>
         </div>
 
         <label className="flex items-center gap-3 mb-4 p-4 bg-yellow-50 rounded-lg cursor-pointer touch-target">
-          <input
-            type="checkbox"
-            checked={isOff}
-            onChange={() => toggleDayOff(date)}
-            className="w-6 h-6"
-          />
+          <input type="checkbox" checked={isOff} onChange={() => toggleDayOff(date)} className="w-6 h-6" />
           <span className="text-lg font-medium">Day off / Holiday</span>
         </label>
 
@@ -1228,17 +1325,7 @@ const CommandCentre = () => {
               const color = getJobTypeColor(booking.type);
               const isProject = booking.type === 'project';
               return (
-                <div
-                  key={booking.id}
-                  className={`p-4 rounded-lg ${
-                    color === 'blue' ? 'bg-blue-100 border-l-4 border-blue-500' :
-                    color === 'green' ? 'bg-emerald-100 border-l-4 border-emerald-500' :
-                    color === 'purple' ? 'bg-purple-100 border-l-4 border-purple-500' :
-                    color === 'pink' ? 'bg-pink-100 border-l-4 border-pink-500' :
-                    color === 'orange' ? 'bg-orange-100 border-l-4 border-orange-500' :
-                    'bg-red-100 border-l-4 border-red-500'
-                  }`}
-                >
+                <div key={booking.id} className={`p-4 rounded-lg ${color === 'blue' ? 'bg-blue-100 border-l-4 border-blue-500' : color === 'green' ? 'bg-emerald-100 border-l-4 border-emerald-500' : color === 'purple' ? 'bg-purple-100 border-l-4 border-purple-500' : color === 'pink' ? 'bg-pink-100 border-l-4 border-pink-500' : color === 'orange' ? 'bg-orange-100 border-l-4 border-orange-500' : 'bg-red-100 border-l-4 border-red-500'}`}>
                   <div className="flex justify-between items-start">
                     <div>
                       {isProject && <div className="text-sm text-gray-600">{customer?.name}</div>}
@@ -1248,166 +1335,72 @@ const CommandCentre = () => {
                     </div>
                     <div className="text-right">
                       {!isProject && <div className="font-bold text-lg">£{booking.price}</div>}
-                      <button
-                        onClick={() => removeBooking(date, booking.id)}
-                        className="text-red-500 text-sm hover:text-red-700 mt-2"
-                      >
-                        Remove
-                      </button>
+                      <button onClick={() => removeBooking(date, booking.id)} className="text-red-500 text-sm hover:text-red-700 mt-2">Remove</button>
                     </div>
                   </div>
-                  
-                  {/* Status buttons - only for non-project bookings */}
                   {!isProject && (
-                  <div className="mt-3 pt-2 border-t flex gap-2 flex-wrap">
-                    {booking.status === 'scheduled' && (
-                      <button
-                        onClick={() => updateBookingStatus(booking.id, 'completed')}
-                        className="text-sm bg-white px-4 py-2 rounded-lg hover:bg-green-100 touch-target"
-                      >
-                        ✓ Done
-                      </button>
-                    )}
-                    {booking.status === 'completed' && (
-                      <button
-                        onClick={() => {
-                          const customer = getCustomerById(booking.customerId);
-                          const distance = customer?.distance || 0;
-                          const actualHours = parseFloat(booking.actualHours) || 0;
-                          const suggestedBand = Math.max(4, Math.ceil(actualHours));
-                          setSelectedBand(suggestedBand);
-                          // Load existing materials from booking
-                          let existingMaterials = [];
-                          if (booking.materials) {
-                            try {
-                              existingMaterials = JSON.parse(booking.materials);
-                            } catch (e) {
-                              existingMaterials = [];
-                            }
-                          }
-                          setInvoiceMaterials(existingMaterials);
-                          setNewMaterialDesc('');
-                          setNewMaterialCost('');
-                          setMaterialSearch('');
-                          setMaterialQty(1);
-                          setNewMaterialQty(1);
-                          setSelectedMaterial(null);
+                    <div className="mt-3 pt-2 border-t flex gap-2 flex-wrap">
+                      {booking.status === 'scheduled' && <button onClick={() => updateBookingStatus(booking.id, 'completed')} className="text-sm bg-white px-4 py-2 rounded-lg hover:bg-green-100 touch-target">✓ Done</button>}
+                      {booking.status === 'completed' && (
+                        <button onClick={() => {
+                          const cust = getCustomerById(booking.customerId);
+                          setSelectedBand(Math.max(4, Math.ceil(parseFloat(booking.actualHours) || 0)));
+                          setInvoiceMaterials([]);
                           setCustomAmount('');
                           setSelectedDistance(null);
-                          setShowInvoiceCalc({ ...booking, distance, actualHours });
-                        }}
-                        className="text-sm bg-amber-200 px-4 py-2 rounded-lg hover:bg-amber-300 touch-target"
-                      >
-                        📧 Invoice
-                      </button>
-                    )}
-                    {booking.status === 'invoiced' && (
-                      <button
-                        onClick={() => updateBookingStatus(booking.id, 'paid')}
-                        className="text-sm bg-green-200 px-4 py-2 rounded-lg hover:bg-green-300 touch-target"
-                      >
-                        💷 Paid
-                      </button>
-                    )}
-                    {booking.status === 'paid' && (
-                      <span className="text-sm bg-green-500 text-white px-4 py-2 rounded-lg">✓ Paid</span>
-                    )}
-                  </div>
+                          setShowInvoiceCalc({ ...booking, distance: cust?.distance || 0, actualHours: parseFloat(booking.actualHours) || 0 });
+                        }} className="text-sm bg-amber-200 px-4 py-2 rounded-lg hover:bg-amber-300 touch-target">📧 Invoice</button>
+                      )}
+                      {booking.status === 'invoiced' && <button onClick={() => updateBookingStatus(booking.id, 'paid')} className="text-sm bg-green-200 px-4 py-2 rounded-lg hover:bg-green-300 touch-target">💷 Paid</button>}
+                      {booking.status === 'paid' && <span className="text-sm bg-green-500 text-white px-4 py-2 rounded-lg">✓ Paid</span>}
+                    </div>
                   )}
                 </div>
               );
             })}
-            {dayBookings.length === 0 && (
-              <p className="text-gray-400 italic text-lg py-4">No bookings</p>
-            )}
+            {dayBookings.length === 0 && <p className="text-gray-400 italic text-lg py-4">No bookings</p>}
           </div>
         )}
-
-        <button
-          onClick={onClose}
-          className="w-full bg-gray-200 py-4 rounded-lg text-lg font-medium hover:bg-gray-300 touch-target"
-        >
-          Close
-        </button>
+        <button onClick={onClose} className="w-full bg-gray-200 py-4 rounded-lg text-lg font-medium hover:bg-gray-300 touch-target">Close</button>
       </div>
     );
   };
 
   // ============================================================
-  // CUSTOMER LIST VIEW
+  // CUSTOMER VIEWS (abbreviated for space)
   // ============================================================
   
   const CustomerListView = () => (
     <div className="bg-white rounded-lg shadow-lg p-4">
-      <div className="flex justify-between items-center mb-4">
-        <h2 className="text-2xl font-bold">Customers ({customers.length})</h2>
-      </div>
-      <div className="grid gap-2 max-h-[calc(100vh-200px)] overflow-y-auto">
-        {customers.sort((a, b) => a.name.localeCompare(b.name)).map(c => {
-          const history = getCustomerHistory(c.id);
-          const outstanding = history
-            .filter(b => b.status !== 'paid')
-            .reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0);
-          
-          return (
-            <div
-              key={c.id}
-              onClick={() => { setSelectedCustomer(c); setView('customerDetail'); }}
-              className="border-2 rounded-lg p-4 hover:bg-gray-50 cursor-pointer flex justify-between items-center touch-target"
-            >
-              <div>
-                <div className="font-bold text-xl">{c.name}</div>
-                <div className="flex gap-1 mt-2 flex-wrap">
-                  {(c.tuningMonths || []).map(m => (
-                    <span key={m} className="bg-blue-100 text-blue-700 text-sm px-2 py-1 rounded">
-                      {monthNames[m].slice(0, 3)}
-                    </span>
-                  ))}
-                  {(!c.tuningMonths || c.tuningMonths.length === 0) && (
-                    <span className="text-gray-400 text-sm">No schedule set</span>
-                  )}
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="text-green-600 font-bold text-xl">
-                  £{c.customRate || DEFAULT_PRICES.tuning_full}
-                </div>
-                {outstanding > 0 && (
-                  <div className="text-amber-600 text-sm">£{outstanding} outstanding</div>
-                )}
-                <div className="text-gray-400 text-2xl mt-2">→</div>
+      <h2 className="text-2xl font-bold mb-4">Customers ({customers.length})</h2>
+      <div className="grid gap-2 max-h-[calc(100vh-200px)] overflow-y-auto scroll-panel">
+        {customers.sort((a, b) => a.name.localeCompare(b.name)).map(c => (
+          <div key={c.id} onClick={() => { setSelectedCustomer(c); setView('customerDetail'); }} className="border-2 rounded-lg p-4 hover:bg-gray-50 cursor-pointer flex justify-between items-center touch-target">
+            <div>
+              <div className="font-bold text-xl">{c.name}</div>
+              <div className="flex gap-1 mt-2 flex-wrap">
+                {(c.tuningMonths || []).map(m => <span key={m} className="bg-blue-100 text-blue-700 text-sm px-2 py-1 rounded">{monthNames[m].slice(0, 3)}</span>)}
               </div>
             </div>
-          );
-        })}
+            <div className="text-right">
+              <div className="text-green-600 font-bold text-xl">£{c.customRate || DEFAULT_PRICES.tuning_full}</div>
+              <div className="text-gray-400 text-2xl mt-2">→</div>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
 
-  // ============================================================
-  // CUSTOMER DETAIL VIEW
-  // ============================================================
-  
   const CustomerDetailView = () => {
     const [localCustomer, setLocalCustomer] = useState(selectedCustomer);
     const customerContacts = contacts.filter(c => c.customerId === selectedCustomer.id);
     const history = getCustomerHistory(selectedCustomer.id);
-    const totalPaid = history.filter(b => b.status === 'paid').reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0);
-    const outstanding = history.filter(b => b.status !== 'paid').reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0);
 
     const toggleMonth = async (monthIdx) => {
       const months = localCustomer.tuningMonths || [];
-      const newMonths = months.includes(monthIdx)
-        ? months.filter(m => m !== monthIdx)
-        : [...months, monthIdx].sort((a, b) => a - b);
-      
+      const newMonths = months.includes(monthIdx) ? months.filter(m => m !== monthIdx) : [...months, monthIdx].sort((a, b) => a - b);
       const updated = { ...localCustomer, tuningMonths: newMonths };
-      setLocalCustomer(updated);
-      await updateCustomer(updated);
-    };
-
-    const saveField = async (field, value) => {
-      const updated = { ...localCustomer, [field]: value };
       setLocalCustomer(updated);
       await updateCustomer(updated);
     };
@@ -1415,164 +1408,113 @@ const CommandCentre = () => {
     return (
       <div className="bg-white rounded-lg shadow-xl p-6 max-w-4xl mx-auto">
         <div className="flex justify-between items-start mb-6">
-          <div>
-            <h2 className="text-3xl font-bold">{localCustomer.name}</h2>
-            {saving && <span className="text-blue-500 text-sm ml-2">Saving...</span>}
-            {lastSaved && !saving && <span className="text-green-500 text-sm ml-2">✓ Saved</span>}
-          </div>
-          <button
-            onClick={() => setView('customers')}
-            className="bg-gray-300 px-6 py-3 rounded-lg text-xl touch-target"
-          >
-            ← Back
-          </button>
+          <h2 className="text-3xl font-bold">{localCustomer.name}</h2>
+          <button onClick={() => setView('customers')} className="bg-gray-300 px-6 py-3 rounded-lg text-xl touch-target">← Back</button>
         </div>
-
-        {/* Contacts */}
-        <div className="mb-6">
-          <h3 className="font-bold text-xl mb-3">👥 Contacts</h3>
-          {customerContacts.length === 0 ? (
-            <p className="text-gray-400 italic">No contacts</p>
-          ) : (
+        
+        {customerContacts.length > 0 && (
+          <div className="mb-6">
+            <h3 className="font-bold text-xl mb-3">👥 Contacts</h3>
             <div className="grid grid-cols-2 gap-4">
               {customerContacts.map(contact => (
                 <div key={contact.id} className="bg-gray-50 p-4 rounded-lg">
-                  <div className="font-bold">{contact.name || 'Unnamed'}</div>
+                  <div className="font-bold">{contact.name}</div>
                   <div className="text-blue-600 text-sm">{contact.role}</div>
                   {contact.phone && <div className="text-lg font-bold text-blue-600 mt-1">📞 {contact.phone}</div>}
-                  {contact.mobile && <div className="text-lg">📱 {contact.mobile}</div>}
-                  {contact.email && <div className="text-sm text-gray-600">✉️ {contact.email}</div>}
                 </div>
               ))}
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
-        {/* Tuning schedule */}
         <div className="border-t-2 pt-4 mb-6">
           <h3 className="font-bold text-xl mb-3">📅 Tuning Schedule</h3>
-          <p className="text-gray-500 mb-3">Tap months when tuning is due:</p>
           <div className="grid grid-cols-6 gap-2">
             {monthNames.map((month, idx) => (
-              <button
-                key={idx}
-                onClick={() => toggleMonth(idx)}
-                className={`p-4 text-lg rounded-lg border-2 font-medium transition-all touch-target ${
-                  (localCustomer.tuningMonths || []).includes(idx)
-                    ? 'bg-blue-500 text-white border-blue-500'
-                    : 'bg-white border-gray-300 hover:border-blue-400'
-                }`}
-              >
-                {month.slice(0, 3)}
-              </button>
+              <button key={idx} onClick={() => toggleMonth(idx)} className={`p-4 text-lg rounded-lg border-2 font-medium touch-target ${(localCustomer.tuningMonths || []).includes(idx) ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-300 hover:border-blue-400'}`}>{month.slice(0, 3)}</button>
             ))}
           </div>
-          
-          <div className="mt-4">
-            <label className="text-gray-500 text-sm">Tuning notes</label>
-            <input
-              type="text"
-              value={localCustomer.tuningNotes || ''}
-              onChange={(e) => setLocalCustomer({ ...localCustomer, tuningNotes: e.target.value })}
-              onBlur={(e) => saveField('tuningNotes', e.target.value)}
-              placeholder="e.g. Before Easter, heating needed..."
-              className="w-full p-3 border-2 rounded-lg mt-1"
-            />
-          </div>
         </div>
 
-        {/* Pricing */}
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          <div className="bg-green-50 p-4 rounded-lg">
-            <label className="text-gray-500 text-sm">Rate (blank = £550)</label>
-            <div className="relative mt-1">
-              <span className="absolute left-3 top-3 text-gray-500 text-xl">£</span>
-              <input
-                type="number"
-                value={localCustomer.customRate || ''}
-                onChange={(e) => setLocalCustomer({ ...localCustomer, customRate: e.target.value ? parseFloat(e.target.value) : null })}
-                onBlur={(e) => saveField('customRate', e.target.value ? parseFloat(e.target.value) : null)}
-                placeholder="550"
-                className="w-full p-3 pl-8 text-2xl border-2 rounded-lg"
-              />
-            </div>
-          </div>
-          <div>
-            <div className="bg-green-100 p-4 rounded-lg mb-2">
-              <span className="text-green-700 text-sm">Total Paid</span>
-              <div className="font-bold text-2xl text-green-700">£{totalPaid.toLocaleString()}</div>
-            </div>
-            {outstanding > 0 && (
-              <div className="bg-amber-100 p-4 rounded-lg">
-                <span className="text-amber-700 text-sm">Outstanding</span>
-                <div className="font-bold text-2xl text-amber-700">£{outstanding.toLocaleString()}</div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Notes */}
-        <div className="mb-6">
-          <label className="text-gray-500 text-sm">Notes</label>
-          <textarea
-            value={localCustomer.notes || ''}
-            onChange={(e) => setLocalCustomer({ ...localCustomer, notes: e.target.value })}
-            onBlur={(e) => saveField('notes', e.target.value)}
-            placeholder="Parking, keys, heating, access notes..."
-            className="w-full p-3 border-2 rounded-lg mt-1"
-            rows={3}
-          />
-        </div>
-
-        {/* Job History */}
         <div className="border-t-2 pt-4">
           <h3 className="font-bold text-xl mb-3">📋 Job History ({history.length})</h3>
-          {history.length === 0 ? (
-            <p className="text-gray-400 italic">No jobs yet</p>
-          ) : (
-            <div className="space-y-2 max-h-60 overflow-y-auto">
-              {history.map(booking => {
-                const color = getJobTypeColor(booking.type);
-                return (
-                  <div
-                    key={booking.id}
-                    className={`p-4 rounded-lg border-l-4 ${
-                      color === 'blue' ? 'bg-blue-50 border-blue-500' :
-                      color === 'green' ? 'bg-emerald-50 border-emerald-500' :
-                      color === 'purple' ? 'bg-purple-50 border-purple-500' :
-                      color === 'orange' ? 'bg-orange-50 border-orange-500' :
-                      'bg-red-50 border-red-500'
-                    }`}
-                  >
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <div className="font-bold">
-                          {new Date(booking.date).toLocaleDateString('en-GB', {
-                            weekday: 'short', day: 'numeric', month: 'short', year: 'numeric'
-                          })}
-                        </div>
-                        <div className="text-sm text-gray-600">{getJobTypeLabel(booking.type)}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-bold text-lg">£{booking.price}</div>
-                        <div className="text-sm">
-                          {booking.status === 'paid' ? (
-                            <span className="text-green-600">✓ Paid</span>
-                          ) : booking.status === 'invoiced' ? (
-                            <span className="text-blue-600">Invoiced</span>
-                          ) : booking.status === 'completed' ? (
-                            <span className="text-amber-600">Done - needs invoice</span>
-                          ) : (
-                            <span className="text-gray-500">Scheduled</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+          <div className="space-y-2 max-h-60 overflow-y-auto">
+            {history.map(booking => (
+              <div key={booking.id} className="p-4 rounded-lg bg-gray-50 border-l-4 border-blue-500">
+                <div className="flex justify-between">
+                  <div className="font-bold">{formatDate(booking.date)}</div>
+                  <div className="font-bold">£{booking.price}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ============================================================
+  // INVOICE CALCULATOR MODAL
+  // ============================================================
+  
+  const InvoiceCalculatorModal = () => {
+    if (!showInvoiceCalc) return null;
+    const serviceType = showInvoiceCalc.serviceType || showInvoiceCalc.type || 'TSC';
+    const band = pricing.timeBands.find(b => b.hours === selectedBand);
+    const bandPrice = band ? (band[serviceType] || band.TSC || 0) : 0;
+    const serviceCharge = customAmount ? parseFloat(customAmount) : bandPrice;
+    const autoDistancePremium = pricing.distanceBands.find(d => (showInvoiceCalc.distance || 0) >= d.minMiles && (showInvoiceCalc.distance || 0) <= d.maxMiles)?.premium || 0;
+    const distancePremium = selectedDistance !== null ? selectedDistance : autoDistancePremium;
+    const materialsTotal = invoiceMaterials.reduce((sum, m) => sum + (m.cost * (m.quantity || 1)), 0);
+    const total = serviceCharge + distancePremium + materialsTotal;
+    
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
+          <div className="flex justify-between items-start mb-4">
+            <div>
+              <h2 className="text-2xl font-bold">💰 Invoice Calculator</h2>
+              <p className="text-gray-600">{getCustomerById(showInvoiceCalc.customerId)?.name}</p>
             </div>
-          )}
+            <button onClick={() => setShowInvoiceCalc(null)} className="text-2xl text-gray-400 hover:text-gray-600">×</button>
+          </div>
+          
+          <div className="bg-gray-100 rounded-lg p-4 mb-4">
+            <div className="text-sm text-gray-600">Time on site</div>
+            <div className="text-2xl font-bold">{showInvoiceCalc.actualHours ? `${Math.floor(showInvoiceCalc.actualHours)}h ${Math.round((showInvoiceCalc.actualHours % 1) * 60)}m` : 'Not recorded'}</div>
+          </div>
+          
+          <div className="mb-4">
+            <div className="text-sm text-gray-600 mb-2">Select time band:</div>
+            <div className="grid grid-cols-5 gap-2">
+              {pricing.timeBands.map(band => (
+                <button key={band.hours} onClick={() => { setSelectedBand(band.hours); setCustomAmount(''); }} className={`p-3 rounded-lg text-center border-2 ${selectedBand === band.hours && !customAmount ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-200'}`}>
+                  <div className="font-bold">{band.hours}h</div>
+                  <div className="text-sm">£{band[serviceType] || band.TSC || 0}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+          
+          <div className="border-t-2 pt-4 mb-4">
+            <div className="flex justify-between text-lg"><span>Service ({selectedBand}h)</span><span>£{serviceCharge}</span></div>
+            <div className="flex justify-between text-lg"><span>Distance</span><span>+£{distancePremium}</span></div>
+            <div className="flex justify-between text-2xl font-bold mt-2 pt-2 border-t"><span>Total</span><span className="text-green-600">{formatCurrency(total)}</span></div>
+          </div>
+          
+          <div className="flex gap-3">
+            <button onClick={() => setShowInvoiceCalc(null)} className="flex-1 py-3 bg-gray-200 rounded-lg font-medium">Cancel</button>
+            <button onClick={async () => {
+              setSaving(true);
+              try {
+                await apiCall('updateBooking', { data: { id: showInvoiceCalc.id, price: total, status: 'invoiced', invoiceDate: new Date().toISOString().split('T')[0] } });
+                setBookings(bookings.map(b => b.id === showInvoiceCalc.id ? { ...b, price: total, status: 'invoiced', invoiceDate: new Date().toISOString().split('T')[0] } : b));
+                setShowInvoiceCalc(null);
+                setLastSaved(new Date());
+              } catch (err) { alert('Failed: ' + err.message); }
+              finally { setSaving(false); }
+            }} className="flex-1 py-3 bg-green-500 text-white rounded-lg font-bold text-lg">✓ Confirm {formatCurrency(total)}</button>
+          </div>
         </div>
       </div>
     );
@@ -1589,428 +1531,54 @@ const CommandCentre = () => {
         <div className="flex flex-wrap items-center justify-between gap-4">
           <h1 className="text-3xl font-bold">🎹 COMMAND CENTRE</h1>
           
+          {view === 'planner' && (
+            <div className="relative">
+              <input type="text" placeholder="🔍 Search customer..." value={plannerSearch} onChange={(e) => { setPlannerSearch(e.target.value); setShowPlannerSearchResults(e.target.value.length > 0); }} onFocus={() => setShowPlannerSearchResults(plannerSearch.length > 0)} className="w-64 px-4 py-2 border-2 rounded-lg" />
+              {showPlannerSearchResults && plannerSearch && (
+                <div className="absolute top-full left-0 right-0 bg-white border-2 rounded-b-lg shadow-lg max-h-64 overflow-y-auto z-50">
+                  {customers.filter(c => c.name.toLowerCase().includes(plannerSearch.toLowerCase())).slice(0, 10).map(c => (
+                    <div key={c.id} onClick={() => { setSelectedCustomerToBook(c); setBookingType('OTS'); setPlannerSearch(''); setShowPlannerSearchResults(false); }} className="p-3 hover:bg-blue-50 cursor-pointer border-b">
+                      <div className="font-medium">{c.name}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          
           <div className="flex gap-2">
-            <button
-              onClick={() => { setView('planner'); setSelectedDay(null); setSelectedCustomer(null); }}
-              className={`px-5 py-3 rounded-lg text-lg font-bold touch-target ${
-                view === 'planner' ? 'bg-blue-600 text-white' : 'bg-gray-200'
-              }`}
-            >
-              📅 Planner
-            </button>
-            <button
-              onClick={() => { setView('customers'); setSelectedCustomer(null); }}
-              className={`px-5 py-3 rounded-lg text-lg font-bold touch-target ${
-                view.includes('customer') ? 'bg-blue-600 text-white' : 'bg-gray-200'
-              }`}
-            >
-              👥 Customers
-            </button>
+            <button onClick={() => { setView('planner'); setSelectedDay(null); setSelectedCustomer(null); }} className={`px-5 py-3 rounded-lg text-lg font-bold touch-target ${view === 'planner' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>📅 Planner</button>
+            <button onClick={() => { setView('reports'); }} className={`px-5 py-3 rounded-lg text-lg font-bold touch-target ${view === 'reports' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>📊 Reports</button>
+            <button onClick={() => { setView('customers'); setSelectedCustomer(null); }} className={`px-5 py-3 rounded-lg text-lg font-bold touch-target ${view.includes('customer') ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>👥 Customers</button>
           </div>
 
           {view === 'planner' && (
             <div className="flex gap-2">
-              <button
-                onClick={() => setCurrentDate(new Date(currentYear - 1, 0, 1))}
-                className="px-4 py-3 rounded-lg text-lg font-medium bg-gray-200 touch-target"
-              >
-                ← {currentYear - 1}
-              </button>
-              <button
-                onClick={() => setCurrentDate(new Date())}
-                className="px-4 py-3 rounded-lg text-lg font-medium bg-gray-800 text-white touch-target"
-              >
-                {currentYear}
-              </button>
-              <button
-                onClick={() => setCurrentDate(new Date(currentYear + 1, 0, 1))}
-                className="px-4 py-3 rounded-lg text-lg font-medium bg-gray-200 touch-target"
-              >
-                {currentYear + 1} →
-              </button>
+              <button onClick={() => setCurrentDate(new Date(currentYear - 1, 0, 1))} className="px-4 py-3 rounded-lg text-lg font-medium bg-gray-200 touch-target">← {currentYear - 1}</button>
+              <button onClick={() => setCurrentDate(new Date())} className="px-4 py-3 rounded-lg text-lg font-medium bg-gray-800 text-white touch-target">{currentYear}</button>
+              <button onClick={() => setCurrentDate(new Date(currentYear + 1, 0, 1))} className="px-4 py-3 rounded-lg text-lg font-medium bg-gray-200 touch-target">{currentYear + 1} →</button>
             </div>
           )}
 
-          <div className="flex gap-3 items-center">
-            <div className="text-sm bg-blue-100 text-blue-800 px-3 py-2 rounded-lg font-medium">
-              🔵 {stats.tuningDays} tuning
-            </div>
-            <div className="text-sm bg-orange-100 text-orange-800 px-3 py-2 rounded-lg font-medium">
-              🟠 {stats.faultDays} fault
-            </div>
-            <div className="text-sm bg-red-100 text-red-800 px-3 py-2 rounded-lg font-medium">
-              🔴 {stats.bigDays} big
-            </div>
-            <button
-              onClick={loadData}
-              className="px-4 py-3 rounded-lg bg-gray-600 text-white text-lg touch-target"
-              title="Refresh data"
-            >
-              🔄
-            </button>
-          </div>
+          <button onClick={loadData} className="px-4 py-3 rounded-lg bg-gray-600 text-white text-lg touch-target" title="Refresh">🔄</button>
         </div>
       </div>
 
       {/* Main Content */}
       {view === 'planner' && (
         <div className="flex gap-3 flex-1">
-          {jobsDuePanelContent}
-          <div className="flex-1">
-            <YearView />
-          </div>
+          <JobsDuePanel />
+          <div className="flex-1"><YearView /></div>
           {selectedDay && <DayPanel date={selectedDay} onClose={() => setSelectedDay(null)} />}
         </div>
       )}
 
+      {view === 'reports' && <ReportsView />}
       {view === 'customers' && <CustomerListView />}
       {view === 'customerDetail' && selectedCustomer && <CustomerDetailView />}
       
-      {/* Invoice Calculator Modal */}
-      {showInvoiceCalc && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
-            <div className="flex justify-between items-start mb-4">
-              <div>
-                <h2 className="text-2xl font-bold">💰 Invoice Calculator</h2>
-                <p className="text-gray-600">{getCustomerById(showInvoiceCalc.customerId)?.name}</p>
-              </div>
-              <button 
-                onClick={() => setShowInvoiceCalc(null)}
-                className="text-2xl text-gray-400 hover:text-gray-600"
-              >×</button>
-            </div>
-            
-            {/* Actual time worked */}
-            <div className="bg-gray-100 rounded-lg p-4 mb-4">
-              <div className="text-sm text-gray-600">Time on site</div>
-              <div className="text-2xl font-bold">
-                {showInvoiceCalc.actualHours ? `${Math.floor(showInvoiceCalc.actualHours)}h ${Math.round((showInvoiceCalc.actualHours % 1) * 60)}m` : 'Not recorded'}
-              </div>
-              <div className="text-sm text-gray-500">Service: {getJobTypeLabel(showInvoiceCalc.type || showInvoiceCalc.serviceType)}</div>
-            </div>
-            
-            {/* Time band selection */}
-            <div className="mb-4">
-              <div className="text-sm text-gray-600 mb-2">Select time band:</div>
-              <div className="grid grid-cols-5 gap-2 mb-2">
-                {pricing.timeBands.map(band => {
-                  const serviceType = showInvoiceCalc.serviceType || showInvoiceCalc.type || 'TSC';
-                  const price = band[serviceType] || band.TSC || 0;
-                  const isSelected = selectedBand === band.hours && !customAmount;
-                  const isSuggested = Math.max(4, Math.ceil(showInvoiceCalc.actualHours || 0)) === band.hours;
-                  
-                  return (
-                    <button
-                      key={band.hours}
-                      onClick={() => {
-                        setSelectedBand(band.hours);
-                        setCustomAmount('');
-                      }}
-                      className={`p-3 rounded-lg text-center border-2 transition-all ${
-                        isSelected 
-                          ? 'bg-blue-500 text-white border-blue-500' 
-                          : isSuggested
-                            ? 'bg-blue-100 border-blue-300'
-                            : 'bg-white border-gray-200 hover:border-blue-300'
-                      }`}
-                    >
-                      <div className="font-bold">{band.hours}h</div>
-                      <div className="text-sm">£{price}</div>
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-500">Custom:</span>
-                <span className="text-gray-400">£</span>
-                <input
-                  type="number"
-                  placeholder="Enter amount"
-                  value={customAmount}
-                  onChange={(e) => setCustomAmount(e.target.value)}
-                  className={`flex-1 p-2 border-2 rounded text-sm ${customAmount ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}
-                />
-              </div>
-            </div>
-            
-            {/* Distance premium */}
-            <div className="bg-gray-100 rounded-lg p-4 mb-4">
-              <div className="flex justify-between mb-2">
-                <span className="text-gray-600">Distance</span>
-                <span>{showInvoiceCalc.distance || 0} miles</span>
-              </div>
-              <div className="text-sm text-gray-600 mb-2">Select distance band:</div>
-              <div className="grid grid-cols-4 gap-2">
-                {pricing.distanceBands.map((band, idx) => {
-                  const autoSelected = (showInvoiceCalc.distance || 0) >= band.minMiles && 
-                                       (showInvoiceCalc.distance || 0) <= band.maxMiles;
-                  const isSelected = selectedDistance !== null 
-                    ? selectedDistance === band.premium 
-                    : autoSelected;
-                  
-                  return (
-                    <button
-                      key={idx}
-                      onClick={() => setSelectedDistance(band.premium)}
-                      className={`p-2 rounded-lg text-center border-2 transition-all ${
-                        isSelected 
-                          ? 'bg-green-500 text-white border-green-500' 
-                          : 'bg-white border-gray-200 hover:border-green-300'
-                      }`}
-                    >
-                      <div className="text-xs">{band.minMiles}-{band.maxMiles}mi</div>
-                      <div className="font-bold">+£{band.premium}</div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            
-            {/* Materials */}
-            <div className="bg-gray-100 rounded-lg p-4 mb-4">
-              <div className="text-sm text-gray-600 mb-2">Materials / Parts</div>
-              
-              {invoiceMaterials.length > 0 && (
-                <div className="space-y-1 mb-3">
-                  {invoiceMaterials.map((mat, idx) => {
-                    const qty = mat.quantity || 1;
-                    const lineTotal = (mat.cost * qty).toFixed(2);
-                    return (
-                      <div key={idx} className="flex justify-between items-center bg-white p-2 rounded">
-                        <span className="text-sm">{mat.description} {qty > 1 ? `×${qty}` : ''}</span>
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">£{lineTotal}</span>
-                          <button 
-                            onClick={() => setInvoiceMaterials(invoiceMaterials.filter((_, i) => i !== idx))}
-                            className="text-red-500 text-sm"
-                          >✕</button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-              
-              {/* Searchable dropdown */}
-              {materialsList.length > 0 && (
-                <div className="relative mb-3">
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="Search materials..."
-                      value={materialSearch || ''}
-                      onChange={(e) => {
-                        setMaterialSearch(e.target.value);
-                        setSelectedMaterial(null);
-                      }}
-                      className="flex-1 p-2 border rounded text-sm"
-                    />
-                    <input
-                      type="number"
-                      min="1"
-                      value={materialQty}
-                      onChange={(e) => setMaterialQty(parseInt(e.target.value) || 1)}
-                      className="w-16 p-2 border rounded text-sm text-center"
-                      placeholder="Qty"
-                    />
-                    <button
-                      disabled={!selectedMaterial}
-                      onClick={() => {
-                        if (selectedMaterial) {
-                          setInvoiceMaterials([...invoiceMaterials, { 
-                            description: selectedMaterial.name, 
-                            cost: selectedMaterial.price, 
-                            quantity: materialQty 
-                          }]);
-                          setMaterialSearch('');
-                          setSelectedMaterial(null);
-                          setMaterialQty(1);
-                        }
-                      }}
-                      className={`px-3 py-2 rounded text-sm font-medium ${selectedMaterial ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-400'}`}
-                    >Add</button>
-                  </div>
-                  {materialSearch && !selectedMaterial && (
-                    <div className="absolute top-full left-0 right-0 bg-white border rounded-b shadow-lg max-h-40 overflow-y-auto z-10">
-                      {materialsList
-                        .filter(m => m.name.toLowerCase().includes(materialSearch.toLowerCase()))
-                        .map((mat, idx) => (
-                          <div
-                            key={idx}
-                            onClick={() => {
-                              setSelectedMaterial({ name: mat.name, price: mat.price });
-                              setMaterialSearch(mat.name);
-                            }}
-                            className="flex justify-between p-2 hover:bg-blue-50 cursor-pointer border-b"
-                          >
-                            <span>{mat.name}</span>
-                            <span className="text-green-600 font-medium">£{parseFloat(mat.price).toFixed(2)}</span>
-                          </div>
-                        ))}
-                      {materialsList.filter(m => m.name.toLowerCase().includes(materialSearch.toLowerCase())).length === 0 && (
-                        <div className="p-2 text-gray-400">No matches</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-              
-              {/* Manual add */}
-              <div className="text-xs text-gray-500 mb-1">Not listed?</div>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Description"
-                  value={newMaterialDesc}
-                  onChange={(e) => setNewMaterialDesc(e.target.value)}
-                  className="flex-1 p-2 border rounded text-sm"
-                />
-                <input
-                  type="number"
-                  placeholder="£"
-                  value={newMaterialCost}
-                  onChange={(e) => setNewMaterialCost(e.target.value)}
-                  className="w-16 p-2 border rounded text-sm"
-                />
-                <input
-                  type="number"
-                  min="1"
-                  placeholder="Qty"
-                  value={newMaterialQty}
-                  onChange={(e) => setNewMaterialQty(parseInt(e.target.value) || 1)}
-                  className="w-14 p-2 border rounded text-sm text-center"
-                />
-                <button
-                  onClick={() => {
-                    if (newMaterialDesc && newMaterialCost) {
-                      setInvoiceMaterials([...invoiceMaterials, {
-                        description: newMaterialDesc,
-                        cost: parseFloat(newMaterialCost),
-                        quantity: newMaterialQty
-                      }]);
-                      setNewMaterialDesc('');
-                      setNewMaterialCost('');
-                      setNewMaterialQty(1);
-                    }
-                  }}
-                  className="px-3 py-2 bg-blue-500 text-white rounded text-sm font-medium"
-                >+</button>
-              </div>
-            </div>
-            
-            {/* Total */}
-            {(() => {
-              const serviceType = showInvoiceCalc.serviceType || showInvoiceCalc.type || 'TSC';
-              const band = pricing.timeBands.find(b => b.hours === selectedBand);
-              const bandPrice = band ? (band[serviceType] || band.TSC || 0) : 0;
-              const serviceCharge = customAmount ? parseFloat(customAmount) : bandPrice;
-              
-              const autoDistancePremium = pricing.distanceBands.find(d => 
-                (showInvoiceCalc.distance || 0) >= d.minMiles && 
-                (showInvoiceCalc.distance || 0) <= d.maxMiles
-              )?.premium || 0;
-              const distancePremium = selectedDistance !== null ? selectedDistance : autoDistancePremium;
-              
-              const materialsTotal = invoiceMaterials.reduce((sum, m) => sum + (m.cost * (m.quantity || 1)), 0);
-              const total = serviceCharge + distancePremium + materialsTotal;
-              
-              return (
-                <div className="border-t-2 pt-4 mb-4">
-                  <div className="flex justify-between text-lg">
-                    <span>Service {customAmount ? '(custom)' : `(${selectedBand}h)`}</span>
-                    <span>£{serviceCharge}</span>
-                  </div>
-                  <div className="flex justify-between text-lg">
-                    <span>Distance</span>
-                    <span>+£{distancePremium}</span>
-                  </div>
-                  {materialsTotal > 0 && (
-                    <div className="flex justify-between text-lg">
-                      <span>Materials</span>
-                      <span>+£{materialsTotal.toFixed(2)}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between text-2xl font-bold mt-2 pt-2 border-t">
-                    <span>Total</span>
-                    <span className="text-green-600">£{total.toFixed(2)}</span>
-                  </div>
-                </div>
-              );
-            })()}
-            
-            {/* Action buttons */}
-            <div className="flex gap-3">
-              <button
-                onClick={() => setShowInvoiceCalc(null)}
-                className="flex-1 py-3 bg-gray-200 rounded-lg font-medium"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  const serviceType = showInvoiceCalc.serviceType || showInvoiceCalc.type || 'TSC';
-                  const band = pricing.timeBands.find(b => b.hours === selectedBand);
-                  const bandPrice = band ? (band[serviceType] || band.TSC || 0) : 0;
-                  const serviceCharge = customAmount ? parseFloat(customAmount) : bandPrice;
-                  
-                  const autoDistancePremium = pricing.distanceBands.find(d => 
-                    (showInvoiceCalc.distance || 0) >= d.minMiles && 
-                    (showInvoiceCalc.distance || 0) <= d.maxMiles
-                  )?.premium || 0;
-                  const distancePremium = selectedDistance !== null ? selectedDistance : autoDistancePremium;
-                  
-                  const materialsTotal = invoiceMaterials.reduce((sum, m) => sum + (m.cost * (m.quantity || 1)), 0);
-                  const total = serviceCharge + distancePremium + materialsTotal;
-                  
-                  // Update booking with price and status
-                  setSaving(true);
-                  try {
-                    await apiCall('updateBooking', {
-                      data: {
-                        id: showInvoiceCalc.id,
-                        price: total,
-                        status: 'invoiced',
-                        materials: JSON.stringify(invoiceMaterials),
-                        invoiceDate: new Date().toISOString().split('T')[0]
-                      }
-                    });
-                    
-                    setBookings(bookings.map(b => 
-                      b.id === showInvoiceCalc.id 
-                        ? { ...b, price: total, status: 'invoiced', materials: JSON.stringify(invoiceMaterials), invoiceDate: new Date().toISOString().split('T')[0] }
-                        : b
-                    ));
-                    setShowInvoiceCalc(null);
-                    setLastSaved(new Date());
-                  } catch (err) {
-                    alert('Failed to update: ' + err.message);
-                  } finally {
-                    setSaving(false);
-                  }
-                }}
-                className="flex-1 py-3 bg-green-500 text-white rounded-lg font-bold text-lg"
-              >
-                ✓ Confirm £{(() => {
-                  const serviceType = showInvoiceCalc.serviceType || showInvoiceCalc.type || 'TSC';
-                  const band = pricing.timeBands.find(b => b.hours === selectedBand);
-                  const bandPrice = band ? (band[serviceType] || band.TSC || 0) : 0;
-                  const serviceCharge = customAmount ? parseFloat(customAmount) : bandPrice;
-                  
-                  const autoDistancePremium = pricing.distanceBands.find(d => 
-                    (showInvoiceCalc.distance || 0) >= d.minMiles && 
-                    (showInvoiceCalc.distance || 0) <= d.maxMiles
-                  )?.premium || 0;
-                  const distancePremium = selectedDistance !== null ? selectedDistance : autoDistancePremium;
-                  
-                  const materialsTotal = invoiceMaterials.reduce((sum, m) => sum + (m.cost * (m.quantity || 1)), 0);
-                  return (serviceCharge + distancePremium + materialsTotal).toFixed(2);
-                })()}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <InvoiceCalculatorModal />
+      {showProjectSummary && <ProjectSummaryModal project={showProjectSummary} onClose={() => setShowProjectSummary(null)} />}
     </div>
   );
 };
