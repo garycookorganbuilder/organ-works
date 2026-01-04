@@ -2183,6 +2183,32 @@ const CommandCentre = () => {
     }
   };
 
+  const deleteCustomer = async (customerId) => {
+    const customer = customers.find(c => c.id === customerId);
+    const customerContacts = contacts.filter(c => c.customerId === customerId);
+    const contactCount = customerContacts.length;
+    
+    const message = contactCount > 0 
+      ? `Delete "${customer?.name}" and ${contactCount} associated contact${contactCount > 1 ? 's' : ''}?\n\nThis cannot be undone.`
+      : `Delete "${customer?.name}"?\n\nThis cannot be undone.`;
+    
+    if (!confirm(message)) return;
+    
+    setSaving(true);
+    try {
+      await apiCall('deleteCustomer', { customerId });
+      setCustomers(customers.filter(c => c.id !== customerId));
+      setContacts(contacts.filter(c => c.customerId !== customerId));
+      setView('customers');
+      setEditingCustomer(null);
+      setSelectedCustomer(null);
+    } catch (err) {
+      alert('Failed to delete customer: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   // ============================================================
   // MAIN RENDER
   // ============================================================
@@ -2801,6 +2827,16 @@ const CommandCentre = () => {
                   </div>
                 ))}
               </div>
+            </div>
+            
+            {/* Delete Customer */}
+            <div className="border-t-2 pt-4 mt-6">
+              <button 
+                onClick={() => deleteCustomer(editingCustomer.id)}
+                className="bg-red-100 text-red-600 px-4 py-2 rounded-lg hover:bg-red-200 text-sm"
+              >
+                🗑️ Delete Customer
+              </button>
             </div>
           </div>
         );
