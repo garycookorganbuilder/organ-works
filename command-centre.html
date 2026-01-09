@@ -105,6 +105,7 @@ const CommandCentre = () => {
   const [customQuote, setCustomQuote] = useState('');
   const [jobNotes, setJobNotes] = useState('');
   const [showAddTicket, setShowAddTicket] = useState(false);
+  const [editingTicket, setEditingTicket] = useState(null);
   const [newTicketCustomer, setNewTicketCustomer] = useState('');
   const [newTicketDescription, setNewTicketDescription] = useState('');
   const [newTicketType, setNewTicketType] = useState('fault');
@@ -861,9 +862,27 @@ const CommandCentre = () => {
 
   const deleteTicket = async (ticketId) => {
     setSaving(true);
-    try { await apiCall('deleteTicket', { ticketId }); setTickets(tickets.filter(t => t.id !== ticketId)); }
+    try { await apiCall('deleteTicket', { ticketId }); setTickets(tickets.filter(t => t.id !== ticketId)); setEditingTicket(null); }
     catch (err) { alert('Failed to delete: ' + err.message); }
     finally { setSaving(false); }
+  };
+
+  const updateTicket = async (ticket) => {
+    setSaving(true);
+    try {
+      await apiCall('updateTicket', { data: JSON.stringify(ticket) });
+      setTickets(tickets.map(t => t.id === ticket.id ? ticket : t));
+      setEditingTicket(null);
+      setLastSaved(new Date());
+    } catch (err) {
+      alert('Failed to update: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openEditTicket = (ticket) => {
+    setEditingTicket({ ...ticket });
   };
 
   const updateCustomer = async (customer) => {
@@ -2438,7 +2457,10 @@ const CommandCentre = () => {
                   <div key={ticket.id} onClick={() => selectTicketToBook(ticket)} className={`p-3 rounded-lg cursor-pointer mb-2 border-2 ${isSelected ? 'bg-orange-100 border-orange-500' : 'bg-red-50 border-red-300 hover:border-orange-400'}`}>
                     <div className="flex justify-between items-start">
                       <div className="font-bold">{icon} {customer?.name || 'Unknown'}</div>
-                      <button onClick={(e) => { e.stopPropagation(); deleteTicket(ticket.id); }} className="text-gray-400 hover:text-red-500 text-sm">✕</button>
+                      <div className="flex gap-2">
+                        <button onClick={(e) => { e.stopPropagation(); openEditTicket(ticket); }} className="text-gray-400 hover:text-blue-500 text-sm">✏️</button>
+                        <button onClick={(e) => { e.stopPropagation(); deleteTicket(ticket.id); }} className="text-gray-400 hover:text-red-500 text-sm">✕</button>
+                      </div>
                     </div>
                     <div className="text-sm text-gray-700">{ticket.description}</div>
                     {ticket.dueType === 'next-visit' && nextVisit && (
@@ -3003,7 +3025,10 @@ const CommandCentre = () => {
                             )}
                             {ticket.dueDate && ticket.dueType !== 'next-visit' && <div className="text-sm text-gray-500">Due: {formatDate(ticket.dueDate)}</div>}
                           </div>
-                          <button onClick={() => deleteTicket(ticket.id)} className="text-gray-400 hover:text-red-500">✕</button>
+                          <div className="flex gap-2">
+                            <button onClick={() => openEditTicket(ticket)} className="text-gray-400 hover:text-blue-500">✏️</button>
+                            <button onClick={() => deleteTicket(ticket.id)} className="text-gray-400 hover:text-red-500">✕</button>
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -3045,6 +3070,106 @@ const CommandCentre = () => {
       
       {showProjectSummary && <ProjectSummaryModal project={showProjectSummary} onClose={() => setShowProjectSummary(null)} />}
       {showInvoiceCalc && <InvoiceCalcModal />}
+      
+      {/* Edit Ticket Modal */}
+      {editingTicket && (() => {
+        const customer = getCustomerById(editingTicket.customerId);
+        const typeIcons = { fault: '⚠️', quote: '💰', reminder: '🔔', 'part-return': '🔧', 'follow-up': '📞' };
+        
+        // Get next tuning month for this customer
+        const getNextTuningMonthForCustomer = () => {
+          const now = new Date();
+          const currentMonth = now.getMonth();
+          const currentYear = now.getFullYear();
+          if (!customer?.tuningMonths || customer.tuningMonths.length === 0) return null;
+          const sortedMonths = [...customer.tuningMonths].sort((a, b) => a - b);
+          const nextMonth = sortedMonths.find(m => m >= currentMonth);
+          if (nextMonth !== undefined) return { month: nextMonth, year: currentYear };
+          return { month: sortedMonths[0], year: currentYear + 1 };
+        };
+        const nextVisit = getNextTuningMonthForCustomer();
+        
+        return (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={() => setEditingTicket(null)}>
+            <div className="bg-white rounded-xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="flex justify-between items-start mb-4">
+                <h2 className="text-2xl font-bold">Edit Ticket</h2>
+                <button onClick={() => setEditingTicket(null)} className="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
+              </div>
+              
+              <div className="mb-4 p-3 bg-gray-100 rounded-lg">
+                <div className="font-bold text-lg">{customer?.name || 'Unknown'}</div>
+              </div>
+              
+              <div className="mb-4">
+                <label className="block text-sm text-gray-600 mb-1">Type</label>
+                <select 
+                  value={editingTicket.type || 'fault'} 
+                  onChange={(e) => setEditingTicket({...editingTicket, type: e.target.value})}
+                  className="w-full p-3 border-2 rounded-lg"
+                >
+                  <option value="fault">⚠️ Fault</option>
+                  <option value="quote">💰 Quote Required</option>
+                  <option value="reminder">🔔 Reminder</option>
+                  <option value="part-return">🔧 Part to Return</option>
+                  <option value="follow-up">📞 Follow Up</option>
+                </select>
+              </div>
+              
+              <div className="mb-4">
+                <label className="block text-sm text-gray-600 mb-1">Description</label>
+                <textarea 
+                  value={editingTicket.description || ''} 
+                  onChange={(e) => setEditingTicket({...editingTicket, description: e.target.value})}
+                  className="w-full p-3 border-2 rounded-lg min-h-[100px]"
+                  placeholder="What needs to be done?"
+                />
+              </div>
+              
+              <div className="mb-4">
+                <label className="block text-sm text-gray-600 mb-1">When to surface</label>
+                <div className="flex gap-2 mb-2">
+                  <button 
+                    onClick={() => setEditingTicket({...editingTicket, dueType: 'next-visit', dueDate: ''})} 
+                    className={`flex-1 p-2 rounded font-medium ${editingTicket.dueType === 'next-visit' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
+                  >
+                    📅 Next Visit
+                  </button>
+                  <button 
+                    onClick={() => setEditingTicket({...editingTicket, dueType: 'month'})} 
+                    className={`flex-1 p-2 rounded font-medium ${editingTicket.dueType !== 'next-visit' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
+                  >
+                    🗓️ Specific Month
+                  </button>
+                </div>
+                {editingTicket.dueType === 'next-visit' && nextVisit && (
+                  <div className="text-sm text-blue-600 p-2 bg-blue-50 rounded">📅 Will surface: {monthNames[nextVisit.month]} {nextVisit.year}</div>
+                )}
+                {editingTicket.dueType === 'next-visit' && !nextVisit && (
+                  <div className="text-sm text-orange-600 p-2 bg-orange-50 rounded">⚠️ Customer has no tuning months set</div>
+                )}
+                {editingTicket.dueType !== 'next-visit' && (
+                  <input 
+                    type="month" 
+                    value={editingTicket.dueDate ? editingTicket.dueDate.slice(0, 7) : ''} 
+                    onChange={(e) => setEditingTicket({...editingTicket, dueDate: e.target.value ? e.target.value + '-01' : ''})}
+                    className="w-full p-3 border-2 rounded-lg"
+                  />
+                )}
+              </div>
+              
+              <div className="text-xs text-gray-400 mb-4">
+                Created: {editingTicket.createdAt ? new Date(editingTicket.createdAt).toLocaleDateString('en-GB') : 'Unknown'}
+              </div>
+              
+              <div className="flex gap-2">
+                <button onClick={() => updateTicket(editingTicket)} className="flex-1 py-3 bg-green-500 text-white rounded-lg font-medium">Save</button>
+                <button onClick={() => { deleteTicket(editingTicket.id); }} className="py-3 px-4 bg-red-100 text-red-600 rounded-lg font-medium">Delete</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };
