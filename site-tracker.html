@@ -461,6 +461,98 @@
       font-size: 20px;
       cursor: pointer;
     }
+    
+    /* Ticket Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+    }
+    
+    .modal-overlay.active {
+      display: flex;
+    }
+    
+    .modal {
+      background: #16213e;
+      border-radius: 16px;
+      padding: 24px;
+      width: 90%;
+      max-width: 400px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+    
+    .modal h2 {
+      margin: 0 0 20px 0;
+      font-size: 20px;
+    }
+    
+    .modal-field {
+      margin-bottom: 16px;
+    }
+    
+    .modal-field label {
+      display: block;
+      color: #888;
+      font-size: 14px;
+      margin-bottom: 6px;
+    }
+    
+    .modal-field input,
+    .modal-field select,
+    .modal-field textarea {
+      width: 100%;
+      padding: 12px;
+      font-size: 16px;
+      border: 2px solid #333;
+      border-radius: 8px;
+      background: #0f0f23;
+      color: white;
+    }
+    
+    .modal-field textarea {
+      min-height: 80px;
+      resize: vertical;
+    }
+    
+    .modal-btns {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+    }
+    
+    .modal-btns button {
+      flex: 1;
+      padding: 14px;
+      font-size: 16px;
+      font-weight: bold;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    
+    .modal-btns .save-btn {
+      background: #22c55e;
+      color: white;
+    }
+    
+    .modal-btns .cancel-btn {
+      background: #333;
+      color: #888;
+    }
+    
+    .btn-ticket {
+      background: #f59e0b !important;
+      margin-top: 10px;
+    }
   </style>
 </head>
 <body>
@@ -475,6 +567,45 @@
     <div class="loading">
       <div class="spinner"></div>
       <div>Loading today's jobs...</div>
+    </div>
+  </div>
+  
+  <!-- Ticket Modal -->
+  <div class="modal-overlay" id="ticketModal">
+    <div class="modal">
+      <h2>📋 Add Ticket</h2>
+      <div class="modal-field">
+        <label>Customer</label>
+        <input type="text" id="ticketCustomerName" readonly>
+        <input type="hidden" id="ticketCustomerId">
+      </div>
+      <div class="modal-field">
+        <label>Type</label>
+        <select id="ticketType">
+          <option value="fault">⚠️ Fault</option>
+          <option value="quote">💰 Quote Required</option>
+          <option value="reminder">🔔 Reminder</option>
+          <option value="part-return">🔧 Part to Return</option>
+          <option value="follow-up">📞 Follow Up</option>
+        </select>
+      </div>
+      <div class="modal-field">
+        <label>Description</label>
+        <textarea id="ticketDescription" placeholder="What needs to be done?"></textarea>
+      </div>
+      <div class="modal-field">
+        <label>When to surface:</label>
+        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+          <button type="button" id="btnNextVisit" onclick="setDueType('next-visit')" style="flex: 1; padding: 10px; border: 2px solid #333; border-radius: 8px; background: #22c55e; color: white; font-weight: bold;">📅 Next Visit</button>
+          <button type="button" id="btnMonth" onclick="setDueType('month')" style="flex: 1; padding: 10px; border: 2px solid #333; border-radius: 8px; background: #333; color: #888;">🗓️ Specific Month</button>
+        </div>
+        <input type="month" id="ticketDueDate" style="display: none;">
+      </div>
+      <input type="hidden" id="ticketDueType" value="next-visit">
+      <div class="modal-btns">
+        <button class="cancel-btn" onclick="closeTicketModal()">Cancel</button>
+        <button class="save-btn" onclick="saveTicket()">Save</button>
+      </div>
     </div>
   </div>
   
@@ -688,8 +819,10 @@
           html += `<button class="btn btn-start" onclick="startJob('${booking.id}')">▶️ ARRIVED</button>`;
         } else if (isActive) {
           html += `<button class="btn btn-stop" onclick="stopJob('${booking.id}')">⏹️ FINISHED</button>`;
+          html += `<button class="btn btn-ticket" onclick="openTicketModal('${booking.customerId}', '${customer.name.replace(/'/g, "\\'")}')">📋 Add Ticket</button>`;
         } else {
           html += `<button class="btn btn-done" disabled>✓ Complete</button>`;
+          html += `<button class="btn btn-ticket" onclick="openTicketModal('${booking.customerId}', '${customer.name.replace(/'/g, "\\'")}')">📋 Add Ticket</button>`;
         }
         
         // Materials section (show when active or completed)
@@ -990,6 +1123,75 @@
       } catch (err) {
         console.error('Failed to save materials:', err);
         alert('Failed to save materials. Check connection.');
+      }
+    }
+    
+    // Ticket Modal Functions
+    function openTicketModal(customerId, customerName) {
+      document.getElementById('ticketCustomerId').value = customerId;
+      document.getElementById('ticketCustomerName').value = customerName;
+      document.getElementById('ticketType').value = 'fault';
+      document.getElementById('ticketDescription').value = '';
+      document.getElementById('ticketDueDate').value = '';
+      document.getElementById('ticketDueType').value = 'next-visit';
+      setDueType('next-visit');
+      document.getElementById('ticketModal').classList.add('active');
+    }
+    
+    function setDueType(type) {
+      document.getElementById('ticketDueType').value = type;
+      const btnNext = document.getElementById('btnNextVisit');
+      const btnMonth = document.getElementById('btnMonth');
+      const dateInput = document.getElementById('ticketDueDate');
+      
+      if (type === 'next-visit') {
+        btnNext.style.background = '#22c55e';
+        btnNext.style.color = 'white';
+        btnMonth.style.background = '#333';
+        btnMonth.style.color = '#888';
+        dateInput.style.display = 'none';
+      } else {
+        btnNext.style.background = '#333';
+        btnNext.style.color = '#888';
+        btnMonth.style.background = '#22c55e';
+        btnMonth.style.color = 'white';
+        dateInput.style.display = 'block';
+      }
+    }
+    
+    function closeTicketModal() {
+      document.getElementById('ticketModal').classList.remove('active');
+    }
+    
+    async function saveTicket() {
+      const customerId = document.getElementById('ticketCustomerId').value;
+      const type = document.getElementById('ticketType').value;
+      const description = document.getElementById('ticketDescription').value;
+      const dueType = document.getElementById('ticketDueType').value;
+      const dueMonth = document.getElementById('ticketDueDate').value;
+      
+      if (!description.trim()) {
+        alert('Please enter a description');
+        return;
+      }
+      
+      try {
+        await apiCall('addTicket', {
+          data: {
+            customerId: customerId,
+            type: type,
+            description: description,
+            dueDate: dueType === 'next-visit' ? '' : (dueMonth ? dueMonth + '-01' : ''),
+            dueType: dueType,
+            status: 'new'
+          }
+        });
+        
+        closeTicketModal();
+        alert('✅ Ticket saved!');
+      } catch (err) {
+        console.error('Failed to save ticket:', err);
+        alert('Failed to save ticket: ' + err.message);
       }
     }
   </script>
