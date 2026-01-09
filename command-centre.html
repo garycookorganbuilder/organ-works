@@ -107,6 +107,8 @@ const CommandCentre = () => {
   const [showAddTicket, setShowAddTicket] = useState(false);
   const [newTicketCustomer, setNewTicketCustomer] = useState('');
   const [newTicketDescription, setNewTicketDescription] = useState('');
+  const [newTicketType, setNewTicketType] = useState('fault');
+  const [newTicketDueDate, setNewTicketDueDate] = useState('');
   const [customerSearch, setCustomerSearch] = useState('');
   
   // Memoize filtered customers for search to prevent re-render issues
@@ -816,11 +818,30 @@ const CommandCentre = () => {
     if (!newTicketCustomer || !newTicketDescription) return;
     setSaving(true);
     try {
-      const result = await apiCall('addTicket', { data: { customerId: newTicketCustomer, description: newTicketDescription, status: 'new' } });
-      setTickets([...tickets, { id: result.id, customerId: newTicketCustomer, description: newTicketDescription, status: 'new', createdAt: new Date().toISOString() }]);
+      const isNextVisit = newTicketDueDate === 'next-visit';
+      const result = await apiCall('addTicket', { data: { 
+        customerId: newTicketCustomer, 
+        description: newTicketDescription, 
+        type: newTicketType,
+        dueDate: isNextVisit ? '' : newTicketDueDate,
+        dueType: isNextVisit ? 'next-visit' : 'month',
+        status: 'new' 
+      } });
+      setTickets([...tickets, { 
+        id: result.id, 
+        customerId: newTicketCustomer, 
+        description: newTicketDescription, 
+        type: newTicketType,
+        dueDate: isNextVisit ? '' : newTicketDueDate,
+        dueType: isNextVisit ? 'next-visit' : 'month',
+        status: 'new', 
+        createdAt: new Date().toISOString() 
+      }]);
       setShowAddTicket(false);
       setNewTicketCustomer('');
       setNewTicketDescription('');
+      setNewTicketType('fault');
+      setNewTicketDueDate('');
       setCustomerSearch('');
       setLastSaved(new Date());
     } catch (err) {
@@ -2341,24 +2362,125 @@ const CommandCentre = () => {
               </div>
             )}
             
-            {(tickets.length > 0 || showAddTicket) && (
-              <div className="mb-4">
-                <h2 className="text-lg font-bold mb-2">📥 Inbox ({tickets.length})</h2>
-                {tickets.map(ticket => {
-                  const customer = getCustomerById(ticket.customerId);
-                  const isSelected = selectedTicketToBook?.id === ticket.id;
-                  return (
-                    <div key={ticket.id} onClick={() => selectTicketToBook(ticket)} className={`p-3 rounded-lg cursor-pointer mb-2 border-2 ${isSelected ? 'bg-orange-100 border-orange-500' : 'bg-red-50 border-red-300 hover:border-orange-400'}`}>
-                      <div className="flex justify-between items-start">
-                        <div className="font-bold">{customer?.name || 'Unknown'}</div>
-                        <button onClick={(e) => { e.stopPropagation(); deleteTicket(ticket.id); }} className="text-gray-400 hover:text-red-500 text-sm">✕</button>
-                      </div>
-                      <div className="text-sm text-gray-700">{ticket.description}</div>
+            {(tickets.length > 0 || showAddTicket) && (() => {
+              const now = new Date();
+              const currentMonth = now.getMonth();
+              const currentYear = now.getFullYear();
+              
+              // Helper to get customer's next tuning month
+              const getNextTuningMonth = (customerId) => {
+                const customer = getCustomerById(customerId);
+                if (!customer || !customer.tuningMonths || customer.tuningMonths.length === 0) return null;
+                
+                // Find next tuning month from current month onwards
+                const sortedMonths = [...customer.tuningMonths].sort((a, b) => a - b);
+                const nextMonth = sortedMonths.find(m => m >= currentMonth);
+                if (nextMonth !== undefined) return { month: nextMonth, year: currentYear };
+                
+                // Wrap to next year
+                return { month: sortedMonths[0], year: currentYear + 1 };
+              };
+              
+              // Check if ticket is due this month
+              const isDueThisMonth = (ticket) => {
+                if (ticket.dueType === 'next-visit') {
+                  const next = getNextTuningMonth(ticket.customerId);
+                  return next && next.month === currentMonth && next.year === currentYear;
+                }
+                if (!ticket.dueDate) return false;
+                const [year, month] = ticket.dueDate.split('-').map(Number);
+                return year === currentYear && month === currentMonth + 1;
+              };
+              
+              // Check if ticket is overdue
+              const isOverdue = (ticket) => {
+                if (ticket.dueType === 'next-visit') {
+                  // Next-visit tickets can't be overdue in the traditional sense
+                  return false;
+                }
+                if (!ticket.dueDate) return false;
+                const dueDate = new Date(ticket.dueDate);
+                return dueDate < new Date(currentYear, currentMonth, 1);
+              };
+              
+              // Check if ticket is upcoming (future)
+              const isUpcoming = (ticket) => {
+                if (ticket.dueType === 'next-visit') {
+                  const next = getNextTuningMonth(ticket.customerId);
+                  return next && (next.year > currentYear || (next.year === currentYear && next.month > currentMonth));
+                }
+                if (!ticket.dueDate) return false;
+                const [year, month] = ticket.dueDate.split('-').map(Number);
+                return year > currentYear || (year === currentYear && month > currentMonth + 1);
+              };
+              
+              // Filter tickets by status and due date
+              const activeTickets = tickets.filter(t => t.status === 'new');
+              const dueThisMonth = activeTickets.filter(t => isDueThisMonth(t));
+              const overdue = activeTickets.filter(t => isOverdue(t));
+              const noDueDate = activeTickets.filter(t => !t.dueDate && t.dueType !== 'next-visit');
+              const futureTickets = activeTickets.filter(t => isUpcoming(t));
+              
+              const typeIcons = {
+                fault: '⚠️',
+                quote: '💰',
+                reminder: '🔔',
+                'part-return': '🔧',
+                'follow-up': '📞'
+              };
+              
+              const renderTicket = (ticket) => {
+                const customer = getCustomerById(ticket.customerId);
+                const isSelected = selectedTicketToBook?.id === ticket.id;
+                const icon = typeIcons[ticket.type] || '📋';
+                const nextVisit = ticket.dueType === 'next-visit' ? getNextTuningMonth(ticket.customerId) : null;
+                return (
+                  <div key={ticket.id} onClick={() => selectTicketToBook(ticket)} className={`p-3 rounded-lg cursor-pointer mb-2 border-2 ${isSelected ? 'bg-orange-100 border-orange-500' : 'bg-red-50 border-red-300 hover:border-orange-400'}`}>
+                    <div className="flex justify-between items-start">
+                      <div className="font-bold">{icon} {customer?.name || 'Unknown'}</div>
+                      <button onClick={(e) => { e.stopPropagation(); deleteTicket(ticket.id); }} className="text-gray-400 hover:text-red-500 text-sm">✕</button>
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                    <div className="text-sm text-gray-700">{ticket.description}</div>
+                    {ticket.dueType === 'next-visit' && nextVisit && (
+                      <div className="text-xs text-blue-600 mt-1">📅 Next visit ({monthNames[nextVisit.month]} {nextVisit.year})</div>
+                    )}
+                    {ticket.dueDate && ticket.dueType !== 'next-visit' && <div className="text-xs text-gray-500 mt-1">Due: {formatDate(ticket.dueDate)}</div>}
+                  </div>
+                );
+              };
+              
+              return (
+                <div className="mb-4">
+                  {(overdue.length > 0) && (
+                    <>
+                      <h2 className="text-lg font-bold mb-2 text-red-600">⚠️ Overdue ({overdue.length})</h2>
+                      {overdue.map(renderTicket)}
+                    </>
+                  )}
+                  
+                  {(dueThisMonth.length > 0) && (
+                    <>
+                      <h2 className="text-lg font-bold mb-2 text-orange-600">📅 Due This Month ({dueThisMonth.length})</h2>
+                      {dueThisMonth.map(renderTicket)}
+                    </>
+                  )}
+                  
+                  {(noDueDate.length > 0) && (
+                    <>
+                      <h2 className="text-lg font-bold mb-2">📥 Inbox ({noDueDate.length})</h2>
+                      {noDueDate.map(renderTicket)}
+                    </>
+                  )}
+                  
+                  {(futureTickets.length > 0) && (
+                    <>
+                      <h2 className="text-lg font-bold mb-2 text-gray-500">🗓️ Upcoming ({futureTickets.length})</h2>
+                      {futureTickets.map(renderTicket)}
+                    </>
+                  )}
+                </div>
+              );
+            })()}
             
             {showAddTicket && (
               <div className="mb-4 bg-yellow-50 p-3 rounded-lg">
@@ -2377,16 +2499,52 @@ const CommandCentre = () => {
                     ))}
                   </div>
                 )}
+                <select 
+                  value={newTicketType} 
+                  onChange={(e) => setNewTicketType(e.target.value)} 
+                  className="w-full p-2 border rounded mb-2 text-sm"
+                >
+                  <option value="fault">⚠️ Fault</option>
+                  <option value="quote">💰 Quote Required</option>
+                  <option value="reminder">🔔 Reminder</option>
+                  <option value="part-return">🔧 Part to Return</option>
+                  <option value="follow-up">📞 Follow Up</option>
+                </select>
                 <input 
                   type="text" 
-                  placeholder="What's the problem?" 
+                  placeholder="Description..." 
                   value={newTicketDescription} 
                   onChange={(e) => setNewTicketDescription(e.target.value)} 
                   className="w-full p-2 border rounded mb-2 text-sm" 
                 />
+                <div className="mb-2">
+                  <label className="text-sm text-gray-600 block mb-1">When to surface:</label>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => setNewTicketDueDate('next-visit')} 
+                      className={`flex-1 p-2 rounded text-sm font-medium ${newTicketDueDate === 'next-visit' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
+                    >
+                      📅 Next Visit
+                    </button>
+                    <button 
+                      onClick={() => setNewTicketDueDate('')} 
+                      className={`flex-1 p-2 rounded text-sm font-medium ${newTicketDueDate !== 'next-visit' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
+                    >
+                      🗓️ Specific Month
+                    </button>
+                  </div>
+                </div>
+                {newTicketDueDate !== 'next-visit' && (
+                  <input 
+                    type="month" 
+                    value={newTicketDueDate ? newTicketDueDate.slice(0, 7) : ''} 
+                    onChange={(e) => setNewTicketDueDate(e.target.value ? e.target.value + '-01' : '')} 
+                    className="w-full p-2 border rounded mb-2 text-sm" 
+                  />
+                )}
                 <div className="flex gap-2">
                   <button onClick={addTicket} disabled={!newTicketCustomer || !newTicketDescription} className="flex-1 py-2 bg-green-500 text-white rounded font-medium disabled:opacity-50">Save</button>
-                  <button onClick={() => { setShowAddTicket(false); setNewTicketCustomer(''); setNewTicketDescription(''); setCustomerSearch(''); }} className="flex-1 py-2 bg-gray-300 rounded font-medium">Cancel</button>
+                  <button onClick={() => { setShowAddTicket(false); setNewTicketCustomer(''); setNewTicketDescription(''); setNewTicketType('fault'); setNewTicketDueDate(''); setCustomerSearch(''); }} className="flex-1 py-2 bg-gray-300 rounded font-medium">Cancel</button>
                 </div>
               </div>
             )}
@@ -2811,6 +2969,48 @@ const CommandCentre = () => {
                 ))}
               </div>
             </div>
+
+            {/* Customer Tickets Section */}
+            {(() => {
+              const customerTickets = tickets.filter(t => t.customerId === editingCustomer.id && t.status === 'new');
+              const typeIcons = { fault: '⚠️', quote: '💰', reminder: '🔔', 'part-return': '🔧', 'follow-up': '📞' };
+              if (customerTickets.length === 0) return null;
+              
+              // Get next tuning month for this customer
+              const getNextTuningMonth = () => {
+                const now = new Date();
+                const currentMonth = now.getMonth();
+                const currentYear = now.getFullYear();
+                if (!editingCustomer.tuningMonths || editingCustomer.tuningMonths.length === 0) return null;
+                const sortedMonths = [...editingCustomer.tuningMonths].sort((a, b) => a - b);
+                const nextMonth = sortedMonths.find(m => m >= currentMonth);
+                if (nextMonth !== undefined) return { month: nextMonth, year: currentYear };
+                return { month: sortedMonths[0], year: currentYear + 1 };
+              };
+              const nextVisit = getNextTuningMonth();
+              
+              return (
+                <div className="border-t-2 pt-4">
+                  <h3 className="font-bold text-xl mb-3">🎫 Open Tickets ({customerTickets.length})</h3>
+                  <div className="space-y-2">
+                    {customerTickets.map(ticket => (
+                      <div key={ticket.id} className="p-3 rounded-lg bg-yellow-50 border-l-4 border-yellow-500">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <div className="font-bold">{typeIcons[ticket.type] || '📋'} {ticket.description}</div>
+                            {ticket.dueType === 'next-visit' && nextVisit && (
+                              <div className="text-sm text-blue-600">📅 Next visit ({monthNames[nextVisit.month]} {nextVisit.year})</div>
+                            )}
+                            {ticket.dueDate && ticket.dueType !== 'next-visit' && <div className="text-sm text-gray-500">Due: {formatDate(ticket.dueDate)}</div>}
+                          </div>
+                          <button onClick={() => deleteTicket(ticket.id)} className="text-gray-400 hover:text-red-500">✕</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Job History Section */}
             <div className="border-t-2 pt-4">
