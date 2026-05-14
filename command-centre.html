@@ -1407,12 +1407,15 @@ const CommandCentre = () => {
                               <div key={booking.id} className={`flex justify-between items-start ${color === 'blue' ? 'text-blue-700' : color === 'orange' ? 'text-orange-700' : color === 'pink' ? 'text-pink-700' : 'text-gray-700'}`}>
                                 <div>
                                   <span className="font-bold">
-                                    {booking.type === 'project' ? `🔧 ${booking.projectName}` : customer?.name || 'Unknown'}
+                                    {customer?.name || 'Unknown'}
                                   </span>
+                                  {booking.type === 'project' && booking.projectName && (
+                                    <span className="text-pink-600 ml-2">🔧 {booking.projectName}</span>
+                                  )}
                                   <span className="text-gray-500 ml-2 text-sm">
                                     {getJobTypeLabel(booking.type)}
                                   </span>
-                                  {booking.notes && <span className="text-gray-400 ml-2 text-sm italic">— {booking.notes}</span>}
+                                  {booking.notes && booking.type !== 'project' && <span className="text-gray-400 ml-2 text-sm italic">— {booking.notes}</span>}
                                 </div>
                                 <div className="flex items-center gap-2 text-sm">
                                   <span>{statusIcon}</span>
