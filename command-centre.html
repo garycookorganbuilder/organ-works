@@ -150,7 +150,7 @@ const CommandCentre = () => {
   const [editingTicket, setEditingTicket] = useState(null);
   const [newTicketCustomer, setNewTicketCustomer] = useState('');
   const [newTicketDescription, setNewTicketDescription] = useState('');
-  const [newTicketType, setNewTicketType] = useState('fault');
+  const [newTicketType, setNewTicketType] = useState('tuning');
   const [newTicketDueDate, setNewTicketDueDate] = useState('');
   const [customerSearch, setCustomerSearch] = useState('');
   
@@ -897,7 +897,7 @@ const CommandCentre = () => {
     setShowAddTicket(false);
     setNewTicketCustomer('');
     setNewTicketDescription('');
-    setNewTicketType('fault');
+    setNewTicketType('tuning');
     setNewTicketDueDate('');
     setCustomerSearch('');
     
@@ -1967,7 +1967,7 @@ const CommandCentre = () => {
             {/* Tickets */}
             {(tickets.length > 0 || showAddTicket) && (() => {
               const activeTickets = tickets.filter(t => t.status === 'new');
-              const typeIcons = { fault: '⚠️', quote: '💰', reminder: '🔔', 'part-return': '🔧', 'follow-up': '📞' };
+              const typeIcons = { tuning: '🎹', fault: '⚠️', quote: '💰', reminder: '🔔', 'part-return': '🔧', 'follow-up': '📞' };
               
               const renderTicket = (ticket) => {
                 const customer = getCustomerById(ticket.customerId);
@@ -2012,6 +2012,7 @@ const CommandCentre = () => {
                   </div>
                 )}
                 <select value={newTicketType} onChange={(e) => setNewTicketType(e.target.value)} className="w-full p-2 border rounded mb-2 text-sm">
+                  <option value="tuning">🎹 Tuning Request</option>
                   <option value="fault">⚠️ Fault</option>
                   <option value="quote">💰 Quote Required</option>
                   <option value="reminder">🔔 Reminder</option>
@@ -2021,7 +2022,7 @@ const CommandCentre = () => {
                 <input type="text" placeholder="Description..." value={newTicketDescription} onChange={(e) => setNewTicketDescription(e.target.value)} className="w-full p-2 border rounded mb-2 text-sm" />
                 <div className="flex gap-2">
                   <button onClick={addTicket} disabled={!newTicketCustomer || !newTicketDescription} className="flex-1 py-2 bg-green-500 text-white rounded font-medium disabled:opacity-50">Save</button>
-                  <button onClick={() => { setShowAddTicket(false); setNewTicketCustomer(''); setNewTicketDescription(''); setNewTicketType('fault'); setNewTicketDueDate(''); setCustomerSearch(''); }} className="flex-1 py-2 bg-gray-300 rounded font-medium">Cancel</button>
+                  <button onClick={() => { setShowAddTicket(false); setNewTicketCustomer(''); setNewTicketDescription(''); setNewTicketType('tuning'); setNewTicketDueDate(''); setCustomerSearch(''); }} className="flex-1 py-2 bg-gray-300 rounded font-medium">Cancel</button>
                 </div>
               </div>
             )}
@@ -2273,7 +2274,7 @@ const CommandCentre = () => {
       {/* Edit Ticket Modal */}
       {editingTicket && (() => {
         const customer = getCustomerById(editingTicket.customerId);
-        const typeIcons = { fault: '⚠️', quote: '💰', reminder: '🔔', 'part-return': '🔧', 'follow-up': '📞' };
+        const typeIcons = { tuning: '🎹', fault: '⚠️', quote: '💰', reminder: '🔔', 'part-return': '🔧', 'follow-up': '📞' };
         
         return (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={() => setEditingTicket(null)}>
@@ -2290,6 +2291,7 @@ const CommandCentre = () => {
               <div className="mb-4">
                 <label className="block text-sm text-gray-600 mb-1">Type</label>
                 <select value={editingTicket.type || 'fault'} onChange={(e) => setEditingTicket({...editingTicket, type: e.target.value})} className="w-full p-3 border-2 rounded-lg">
+                  <option value="tuning">🎹 Tuning Request</option>
                   <option value="fault">⚠️ Fault</option>
                   <option value="quote">💰 Quote Required</option>
                   <option value="reminder">🔔 Reminder</option>
