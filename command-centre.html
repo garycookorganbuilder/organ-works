@@ -2037,15 +2037,62 @@ const CommandCentre = () => {
             <div className="space-y-2 mb-4">
               {jobsDue.length === 0 ? (
                 <div className="text-center py-8"><div className="text-5xl mb-3">🎉</div><p className="text-gray-500 text-lg">All caught up!</p></div>
-              ) : jobsDue.map((item, idx) => (
-                <div key={idx} onClick={() => { setSelectedCustomerToBook(item.customer); setSelectedGroupToBook(null); setBookingType('OTS'); setCustomQuote(''); setJobNotes(''); }}
-                  className={`p-4 rounded-lg cursor-pointer transition-all touch-target ${item.urgent ? 'bg-amber-50 border-2 border-amber-400' : 'bg-gray-50 border-2 border-gray-200'} ${selectedCustomerToBook?.id === item.customer.id ? 'ring-4 ring-green-500' : 'hover:border-blue-400'}`}>
-                  <div className="font-bold text-lg">{item.customer.name}</div>
-                  <div className="flex justify-between items-center mt-1">
-                    <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{item.monthName} {item.urgent && '⚠️'}</span>
-                  </div>
-                </div>
-              ))}
+              ) : (() => {
+                // Group jobs by tuningGroup
+                const grouped = {};
+                const ungrouped = [];
+                jobsDue.forEach(item => {
+                  if (item.customer.tuningGroup) {
+                    const key = `${item.customer.tuningGroup}-${item.month}-${item.year}`;
+                    if (!grouped[key]) grouped[key] = { group: item.customer.tuningGroup, month: item.month, year: item.year, monthName: item.monthName, urgent: item.urgent, items: [] };
+                    grouped[key].items.push(item);
+                    if (item.urgent) grouped[key].urgent = true;
+                  } else {
+                    ungrouped.push(item);
+                  }
+                });
+                
+                const allItems = [...Object.values(grouped), ...ungrouped.map(item => ({ items: [item], month: item.month, year: item.year, monthName: item.monthName, urgent: item.urgent }))];
+                allItems.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0));
+                
+                return allItems.map((entry, idx) => {
+                  const isGroup = entry.items.length > 1;
+                  const isSelected = isGroup 
+                    ? selectedGroupToBook && entry.items.every(item => selectedGroupToBook.some(g => g.customer.id === item.customer.id))
+                    : selectedCustomerToBook?.id === entry.items[0].customer.id;
+                  
+                  return (
+                    <div key={idx} onClick={() => {
+                      if (isGroup) {
+                        setSelectedGroupToBook(entry.items);
+                        setSelectedCustomerToBook(entry.items[0].customer);
+                      } else {
+                        setSelectedCustomerToBook(entry.items[0].customer);
+                        setSelectedGroupToBook(null);
+                      }
+                      setBookingType('OTS');
+                      setCustomQuote('');
+                      setJobNotes('');
+                    }}
+                      className={`p-4 rounded-lg cursor-pointer transition-all touch-target ${entry.urgent ? 'bg-amber-50 border-2 border-amber-400' : 'bg-gray-50 border-2 border-gray-200'} ${isSelected ? 'ring-4 ring-green-500' : 'hover:border-blue-400'}`}>
+                      {isGroup ? (
+                        <>
+                          <div className="font-bold text-lg text-blue-700">🔗 {entry.group}</div>
+                          <div className="text-sm text-gray-600 mt-1">
+                            {entry.items.map(item => item.customer.name).join(', ')}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="font-bold text-lg">{entry.items[0].customer.name}</div>
+                      )}
+                      <div className="flex justify-between items-center mt-1">
+                        <span className={`text-sm ${entry.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{entry.monthName} {entry.urgent && '⚠️'}</span>
+                        {isGroup && <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">{entry.items.length} churches</span>}
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
             </div>
             
             <div className="border-b-2 mb-4"></div>
@@ -2251,6 +2298,48 @@ const CommandCentre = () => {
             {/* Tuning Schedule */}
             <div className="border-t-2 pt-4 mb-6">
               <h3 className="font-bold text-xl mb-3">📅 Tuning Schedule</h3>
+              
+              {/* Tuning Group */}
+              <div className="mb-4">
+                <label className="text-sm text-gray-600 block mb-1">🔗 Tuning Group (book together)</label>
+                <div className="relative">
+                  <input 
+                    type="text" 
+                    placeholder="e.g. Pontypridd Circuit, Cardiff Bay..."
+                    value={tuningGroupSearch}
+                    onChange={(e) => { setTuningGroupSearch(e.target.value); setShowGroupDropdown(true); }}
+                    onFocus={() => setShowGroupDropdown(true)}
+                    onBlur={() => setTimeout(() => setShowGroupDropdown(false), 200)}
+                    className="w-full p-3 border-2 rounded-lg"
+                  />
+                  {showGroupDropdown && (tuningGroupSearch || existingTuningGroups.length > 0) && (
+                    <div className="absolute top-full left-0 right-0 bg-white border-2 rounded-b-lg shadow-lg max-h-48 overflow-y-auto z-10">
+                      {tuningGroupSearch && !existingTuningGroups.includes(tuningGroupSearch) && (
+                        <div onMouseDown={(e) => e.preventDefault()} onClick={() => setTuningGroup(tuningGroupSearch)} className="p-3 hover:bg-blue-50 cursor-pointer border-b bg-blue-50">
+                          <span className="text-blue-600">+ Create "{tuningGroupSearch}"</span>
+                        </div>
+                      )}
+                      {existingTuningGroups.filter(g => !tuningGroupSearch || g.toLowerCase().includes(tuningGroupSearch.toLowerCase())).map(group => (
+                        <div key={group} onMouseDown={(e) => e.preventDefault()} onClick={() => setTuningGroup(group)} className={`p-3 hover:bg-blue-50 cursor-pointer border-b ${editingCustomer.tuningGroup === group ? 'bg-blue-100' : ''}`}>
+                          {group}
+                          <span className="text-gray-400 text-sm ml-2">({customers.filter(c => c.tuningGroup === group).length})</span>
+                        </div>
+                      ))}
+                      {editingCustomer.tuningGroup && (
+                        <div onMouseDown={(e) => e.preventDefault()} onClick={() => setTuningGroup('')} className="p-3 hover:bg-red-50 cursor-pointer text-red-600">
+                          ✕ Remove from group
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {editingCustomer.tuningGroup && (
+                  <div className="mt-2 text-sm text-gray-600">
+                    In group with: {customers.filter(c => c.tuningGroup === editingCustomer.tuningGroup && c.id !== editingCustomer.id).map(c => c.name).join(', ') || 'no others yet'}
+                  </div>
+                )}
+              </div>
+              
               <div className="grid grid-cols-6 gap-2">
                 {monthNames.map((month, idx) => (
                   <button key={idx} onClick={() => toggleTuningMonth(idx)} className={`p-4 text-lg rounded-lg border-2 font-medium touch-target ${(editingCustomer.tuningMonths || []).includes(idx) ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-300 hover:border-blue-400'}`}>{month.slice(0, 3)}</button>
