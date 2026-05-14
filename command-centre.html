@@ -27,13 +27,45 @@
     .scroll-panel::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 3px; }
     .capacity-bar { height: 24px; border-radius: 4px; overflow: hidden; display: flex; }
     .capacity-segment { height: 100%; transition: width 0.3s ease; }
+    /* Saving indicator - bottom right corner */
+    .saving-indicator {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #1f2937;
+      color: white;
+      padding: 10px 16px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      z-index: 9999;
+      animation: slideUp 0.2s ease-out;
+    }
+    @keyframes slideUp {
+      from { transform: translateY(20px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    .saving-indicator.error { background: #dc2626; }
+    .saving-indicator.success { background: #16a34a; }
+    .mini-spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
   </style>
 </head>
 <body>
   <div id="root"></div>
 
   <script type="text/babel">
-const { useState, useEffect, useCallback, useMemo } = React;
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
 
 const getApiUrl = () => localStorage.getItem('organWorks_apiUrl') || '';
 const setApiUrl = (url) => localStorage.setItem('organWorks_apiUrl', url);
@@ -56,6 +88,9 @@ const apiCall = async (action, params = {}) => {
   return data;
 };
 
+// Generate temporary IDs for optimistic updates
+const generateTempId = () => `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
 const CommandCentre = () => {
   const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -70,6 +105,13 @@ const CommandCentre = () => {
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState('');
   
+  // Background saving state for optimistic updates
+  const [bgSaveCount, setBgSaveCount] = useState(0);
+  const [saveError, setSaveError] = useState(null);
+  const errorTimeoutRef = useRef(null);
+  const successTimeoutRef = useRef(null);
+  const [showSaved, setShowSaved] = useState(false);
+  
   const [customers, setCustomers] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -82,7 +124,7 @@ const CommandCentre = () => {
 
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedCustomerToBook, setSelectedCustomerToBook] = useState(null);
-  const [selectedGroupToBook, setSelectedGroupToBook] = useState(null); // Array of items when booking a group
+  const [selectedGroupToBook, setSelectedGroupToBook] = useState(null);
   const [selectedTicketToBook, setSelectedTicketToBook] = useState(null);
   const [selectedDay, setSelectedDay] = useState(null);
   const [view, setView] = useState('planner');
@@ -112,7 +154,6 @@ const CommandCentre = () => {
   const [newTicketDueDate, setNewTicketDueDate] = useState('');
   const [customerSearch, setCustomerSearch] = useState('');
   
-  // Memoize filtered customers for search to prevent re-render issues
   const filteredCustomersForSearch = useMemo(() => {
     if (!customerSearch) return [];
     return customers.filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase())).slice(0, 5);
@@ -122,7 +163,6 @@ const CommandCentre = () => {
   const [showProjectSummary, setShowProjectSummary] = useState(null);
   const [showCapacityDetails, setShowCapacityDetails] = useState(false);
   
-  // Invoice calculator
   const [showInvoiceCalc, setShowInvoiceCalc] = useState(null);
   const [selectedBand, setSelectedBand] = useState(null);
   const [selectedDistance, setSelectedDistance] = useState(null);
@@ -137,14 +177,12 @@ const CommandCentre = () => {
   const [newMaterialQty, setNewMaterialQty] = useState(1);
   const [selectedMaterial, setSelectedMaterial] = useState(null);
 
-  // Project allocation
   const [allocatingProject, setAllocatingProject] = useState(null);
   const [showNewProject, setShowNewProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectCustomer, setNewProjectCustomer] = useState(null);
   const [projectCustomerSearch, setProjectCustomerSearch] = useState('');
   
-  // Memoize filtered customers for project search
   const filteredCustomersForProject = useMemo(() => {
     if (!projectCustomerSearch) return [];
     return customers.filter(c => c.name.toLowerCase().includes(projectCustomerSearch.toLowerCase())).slice(0, 10);
@@ -152,10 +190,47 @@ const CommandCentre = () => {
   const [newProjectEstDays, setNewProjectEstDays] = useState('');
   const [newProjectYearStart, setNewProjectYearStart] = useState(new Date().getFullYear());
   const [newProjectYearEnd, setNewProjectYearEnd] = useState(new Date().getFullYear());
-  const [editingProject, setEditingProject] = useState(null); // For editing existing projects
+  const [editingProject, setEditingProject] = useState(null);
 
   const currentYear = currentDate.getFullYear();
   const plannerMonths = monthNames.map((name, idx) => ({ name, year: currentYear, month: idx, days: new Date(currentYear, idx + 1, 0).getDate() }));
+
+  // ============================================================
+  // OPTIMISTIC UPDATE HELPERS
+  // ============================================================
+  
+  const startBgSave = () => {
+    setBgSaveCount(c => c + 1);
+    setSaveError(null);
+  };
+  
+  const endBgSave = (success, error = null) => {
+    setBgSaveCount(c => Math.max(0, c - 1));
+    if (success) {
+      setLastSaved(new Date());
+      setShowSaved(true);
+      if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
+      successTimeoutRef.current = setTimeout(() => setShowSaved(false), 1500);
+    } else {
+      setSaveError(error || 'Save failed');
+      if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current);
+      errorTimeoutRef.current = setTimeout(() => setSaveError(null), 5000);
+    }
+  };
+
+  // Saving indicator component
+  const SavingIndicator = () => {
+    if (saveError) {
+      return <div className="saving-indicator error"><span>⚠️</span><span>{saveError}</span></div>;
+    }
+    if (bgSaveCount > 0) {
+      return <div className="saving-indicator"><div className="mini-spinner"></div><span>Saving...</span></div>;
+    }
+    if (showSaved) {
+      return <div className="saving-indicator success"><span>✓</span><span>Saved</span></div>;
+    }
+    return null;
+  };
 
   // Data loading
   const loadData = useCallback(async () => {
@@ -194,7 +269,6 @@ const CommandCentre = () => {
 
   useEffect(() => { if (isConfigured) loadData(); }, [isConfigured, loadData]);
 
-  // Sync contacts to Google
   const syncContactsToGoogle = async () => {
     setSyncing(true);
     setSyncMessage('');
@@ -209,7 +283,6 @@ const CommandCentre = () => {
       setSyncMessage('Error: ' + err.message);
     } finally {
       setSyncing(false);
-      // Clear message after 5 seconds
       setTimeout(() => setSyncMessage(''), 5000);
     }
   };
@@ -222,7 +295,7 @@ const CommandCentre = () => {
     return new Date(year, month - 1, day);
   };
   const getDayOfWeek = (year, month, day) => new Date(year, month, day).getDay();
-  const isWorkDay = (year, month, day) => { const dow = getDayOfWeek(year, month, day); return dow >= 1 && dow <= 5; }; // Mon-Fri
+  const isWorkDay = (year, month, day) => { const dow = getDayOfWeek(year, month, day); return dow >= 1 && dow <= 5; };
   const getBookingsForDay = (date) => bookings.filter(b => b.date === date);
   const getCustomerById = (id) => customers.find(c => c.id === id);
   const getBookingContact = (customerId) => contacts.find(c => c.customerId === customerId && c.isBookingContact) || contacts.find(c => c.customerId === customerId);
@@ -262,7 +335,6 @@ const CommandCentre = () => {
   const isCustomerBookedInMonth = (customerId, monthIndex, year) => {
     const monthStart = getDateString(year, monthIndex, 1);
     const monthEnd = getDateString(year, monthIndex, new Date(year, monthIndex + 1, 0).getDate());
-    // Only count tuning-type bookings (OTS, TSC, WS), not faults or projects
     return bookings.some(b => 
       b.customerId === customerId && 
       b.date >= monthStart && 
@@ -275,16 +347,13 @@ const CommandCentre = () => {
   const getLastTuningPrice = (customerId) => { const history = getCustomerHistory(customerId); const lastTuning = history.find(b => b.type?.startsWith('tuning') && b.status === 'paid'); return lastTuning ? parseFloat(lastTuning.price) : null; };
 
   // ============================================================
-  // CAPACITY PLANNING - THE KEY FEATURE
+  // CAPACITY PLANNING
   // ============================================================
   
   const capacityData = useMemo(() => {
     const now = new Date();
     const today = getDateString(now.getFullYear(), now.getMonth(), now.getDate());
-    const yearStart = `${currentYear}-01-01`;
     
-    // Calculate total tuning visits expected this year
-    // Each customer with tuning months = that many visits per year
     let totalTuningsExpected = 0;
     customers.forEach(c => {
       if (c.tuningMonths && c.tuningMonths.length > 0) {
@@ -292,29 +361,23 @@ const CommandCentre = () => {
       }
     });
     
-    // Count tunings already booked this year (any type that's tuning-related)
     const tuningsBookedThisYear = bookings.filter(b => {
       if (!b.date) return false;
       const bookingYear = parseInt(b.date.split('-')[0]);
       if (bookingYear !== currentYear) return false;
-      // Count OTS, TSC as tuning visits
       return b.type === 'OTS' || b.type === 'TSC' || b.type?.startsWith('tuning');
     }).length;
     
-    // Remaining tunings to book
     const tuningsRemaining = Math.max(0, totalTuningsExpected - tuningsBookedThisYear);
-    
-    // Days needed for remaining tunings (2 per day, half-day each)
     const daysNeededForTunings = Math.ceil(tuningsRemaining / 2);
     
-    // Calculate workdays in the year (Mon-Fri)
     const getAllWorkdays = () => {
       const workdays = [];
       for (let month = 0; month < 12; month++) {
         const daysInMonth = new Date(currentYear, month + 1, 0).getDate();
         for (let day = 1; day <= daysInMonth; day++) {
           const dow = new Date(currentYear, month, day).getDay();
-          if (dow >= 1 && dow <= 5) { // Mon-Fri
+          if (dow >= 1 && dow <= 5) {
             workdays.push(getDateString(currentYear, month, day));
           }
         }
@@ -325,17 +388,12 @@ const CommandCentre = () => {
     const allWorkdays = getAllWorkdays();
     const totalWorkdays = allWorkdays.length;
     
-    // Days off this year
     const daysOffThisYear = daysOff.filter(d => d && d.date && parseInt(d.date.split('-')[0]) === currentYear);
     const daysOffDatesThisYear = daysOffThisYear.map(d => d.date);
-    
-    // Available workdays (minus days off)
     const availableWorkdays = allWorkdays.filter(d => !daysOffDatesThisYear.includes(d));
     
-    // Count bookings by type for this year
     const yearBookings = bookings.filter(b => b.date && parseInt(b.date.split('-')[0]) === currentYear);
     
-    // Count unique days by booking type (a day counts once even if multiple bookings)
     const tuningDays = new Set();
     const faultDays = new Set();
     const projectDays = new Set();
@@ -350,55 +408,37 @@ const CommandCentre = () => {
       }
     });
     
-    // Booked days (unique dates with bookings)
     const bookedDates = new Set(yearBookings.map(b => b.date));
     
-    // Calculate planned project days for this year
-    // Projects spanning this year, with days split across years
     let plannedProjectDays = 0;
     projects.filter(p => p.status === 'active').forEach(p => {
-      // Support both old targetYear and new yearStart/yearEnd format
       const yearStart = parseInt(p.yearStart) || parseInt(p.targetYear) || currentYear;
       const yearEnd = parseInt(p.yearEnd) || parseInt(p.targetYear) || currentYear;
       
-      // Check if this year falls within the project's range
       if (currentYear >= yearStart && currentYear <= yearEnd) {
         const estimatedDays = parseInt(p.estimatedDays) || 0;
         const yearsSpanned = yearEnd - yearStart + 1;
-        // Split days evenly across years
         const daysThisYear = Math.ceil(estimatedDays / yearsSpanned);
-        // Count how many days are already booked for this project THIS year
         const bookedForProjectThisYear = yearBookings.filter(b => b.projectId === p.id).length;
-        // Remaining planned days = allocated for this year - already booked this year
         plannedProjectDays += Math.max(0, daysThisYear - bookedForProjectThisYear);
       }
     });
     
-    // Unbooked available days (full year from Jan 1st)
     const unbookedDays = availableWorkdays.filter(d => !bookedDates.has(d));
-    
-    // Days truly free = unbooked - reserved for tunings - planned projects
     const daysFreeForProjects = Math.max(0, unbookedDays.length - daysNeededForTunings - plannedProjectDays);
     
-    // Is overcommitted?
     const totalCommitted = daysNeededForTunings + plannedProjectDays;
     const isOvercommitted = totalCommitted > unbookedDays.length;
     const overcommittedBy = isOvercommitted ? totalCommitted - unbookedDays.length : 0;
     
-    // For coloring the calendar, determine which unbooked days are "reserved" vs "free"
-    // Reserved days fill from START of year forwards (January first)
-    // Free days appear at the END of the year
-    // As tunings get booked, they lock in place and reserved block shrinks
     const futureUnbookedDays = unbookedDays.filter(d => d >= today);
     const reservedDays = new Set();
     const plannedDays = new Set();
-    const sortedFutureUnbooked = [...futureUnbookedDays].sort((a, b) => a.localeCompare(b)); // Earliest first
+    const sortedFutureUnbooked = [...futureUnbookedDays].sort((a, b) => a.localeCompare(b));
     
-    // First mark tuning reserved days
     for (let i = 0; i < Math.min(daysNeededForTunings, sortedFutureUnbooked.length); i++) {
       reservedDays.add(sortedFutureUnbooked[i]);
     }
-    // Then mark planned project days (after tuning days)
     for (let i = daysNeededForTunings; i < Math.min(daysNeededForTunings + plannedProjectDays, sortedFutureUnbooked.length); i++) {
       plannedDays.add(sortedFutureUnbooked[i]);
     }
@@ -421,9 +461,9 @@ const CommandCentre = () => {
       daysFreeForProjects,
       isOvercommitted,
       overcommittedBy,
-      reservedDays, // Set of date strings that are "reserved" for tunings (future only)
-      plannedDays, // Set of date strings for planned project days
-      today, // For reference
+      reservedDays,
+      plannedDays,
+      today,
     };
   }, [customers, bookings, daysOff, projects, currentYear]);
 
@@ -439,7 +479,6 @@ const CommandCentre = () => {
       tuningDaysBooked, faultDaysBooked, projectDaysBooked, plannedProjectDays
     } = capacityData;
     
-    // Calculate bar segments - matching calendar colours
     const barTotal = availableDays;
     const tuningWidth = (tuningDaysBooked / barTotal) * 100;
     const faultWidth = (faultDaysBooked / barTotal) * 100;
@@ -452,15 +491,11 @@ const CommandCentre = () => {
       <div className="bg-white rounded-lg shadow p-4 mb-3">
         <div className="flex justify-between items-center mb-2">
           <h3 className="font-bold text-lg">📊 Capacity {currentYear}</h3>
-          <button 
-            onClick={() => setShowCapacityDetails(!showCapacityDetails)}
-            className="text-sm text-blue-600 hover:underline"
-          >
+          <button onClick={() => setShowCapacityDetails(!showCapacityDetails)} className="text-sm text-blue-600 hover:underline">
             {showCapacityDetails ? 'Hide details' : 'Show details'}
           </button>
         </div>
         
-        {/* Main capacity bar - colours match calendar legend */}
         <div className="capacity-bar bg-gray-200 mb-2">
           {tuningDaysBooked > 0 && <div className="capacity-segment bg-blue-500" style={{ width: `${tuningWidth}%` }} title={`Tunings: ${tuningDaysBooked} days`}></div>}
           {faultDaysBooked > 0 && <div className="capacity-segment bg-orange-400" style={{ width: `${faultWidth}%` }} title={`Faults: ${faultDaysBooked} days`}></div>}
@@ -470,89 +505,26 @@ const CommandCentre = () => {
           <div className="capacity-segment bg-green-200 border-y border-green-300" style={{ width: `${freeWidth}%` }} title={`Free: ${daysFreeForProjects} days`}></div>
         </div>
         
-        {/* Legend and key numbers - matching calendar colours */}
         <div className="flex flex-wrap gap-4 text-sm">
-          {tuningDaysBooked > 0 && (
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 bg-blue-500 rounded"></div>
-              <span>Tunings: <strong>{tuningDaysBooked}</strong></span>
-            </div>
-          )}
-          {faultDaysBooked > 0 && (
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 bg-orange-400 rounded"></div>
-              <span>Faults: <strong>{faultDaysBooked}</strong></span>
-            </div>
-          )}
-          {projectDaysBooked > 0 && (
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 bg-pink-400 rounded"></div>
-              <span>Projects: <strong>{projectDaysBooked}</strong></span>
-            </div>
-          )}
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-amber-200 border border-amber-300 rounded"></div>
-            <span>Reserved: <strong>{daysNeededForTunings}</strong></span>
-          </div>
-          {plannedProjectDays > 0 && (
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 bg-pink-200 border border-pink-300 rounded"></div>
-              <span>Planned: <strong>{plannedProjectDays}</strong></span>
-            </div>
-          )}
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-green-200 border border-green-300 rounded"></div>
-            <span>Free: <strong className={daysFreeForProjects > 20 ? 'text-green-600' : daysFreeForProjects > 0 ? 'text-amber-600' : 'text-red-600'}>{daysFreeForProjects}</strong></span>
-          </div>
-          {isOvercommitted && (
-            <div className="flex items-center gap-2 text-red-600 font-bold">
-              ⚠️ Overcommitted by {overcommittedBy} days!
-            </div>
-          )}
+          {tuningDaysBooked > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-blue-500 rounded"></div><span>Tunings: <strong>{tuningDaysBooked}</strong></span></div>}
+          {faultDaysBooked > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-orange-400 rounded"></div><span>Faults: <strong>{faultDaysBooked}</strong></span></div>}
+          {projectDaysBooked > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-pink-400 rounded"></div><span>Projects: <strong>{projectDaysBooked}</strong></span></div>}
+          <div className="flex items-center gap-2"><div className="w-4 h-4 bg-amber-200 border border-amber-300 rounded"></div><span>Reserved: <strong>{daysNeededForTunings}</strong></span></div>
+          {plannedProjectDays > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-pink-200 border border-pink-300 rounded"></div><span>Planned: <strong>{plannedProjectDays}</strong></span></div>}
+          <div className="flex items-center gap-2"><div className="w-4 h-4 bg-green-200 border border-green-300 rounded"></div><span>Free: <strong className={daysFreeForProjects > 20 ? 'text-green-600' : daysFreeForProjects > 0 ? 'text-amber-600' : 'text-red-600'}>{daysFreeForProjects}</strong></span></div>
+          {isOvercommitted && <div className="flex items-center gap-2 text-red-600 font-bold">⚠️ Overcommitted by {overcommittedBy} days!</div>}
         </div>
         
-        {/* Detailed breakdown */}
         {showCapacityDetails && (
           <div className="mt-4 pt-4 border-t grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-            <div className="bg-gray-50 p-3 rounded">
-              <div className="text-gray-500">Total workdays</div>
-              <div className="text-2xl font-bold">{totalWorkdays}</div>
-              <div className="text-xs text-gray-400">Mon-Fri all year</div>
-            </div>
-            <div className="bg-gray-50 p-3 rounded">
-              <div className="text-gray-500">Days off</div>
-              <div className="text-2xl font-bold">{daysOffCount}</div>
-            </div>
-            <div className="bg-gray-50 p-3 rounded">
-              <div className="text-gray-500">Available</div>
-              <div className="text-2xl font-bold">{availableDays}</div>
-              <div className="text-xs text-gray-400">workdays − off</div>
-            </div>
-            <div className="bg-gray-50 p-3 rounded">
-              <div className="text-gray-500">Booked</div>
-              <div className="text-2xl font-bold">{bookedDays}</div>
-              <div className="text-xs text-gray-400">{tuningDaysBooked}T + {faultDaysBooked}F + {projectDaysBooked}P</div>
-            </div>
-            <div className="bg-blue-50 p-3 rounded">
-              <div className="text-blue-600">Tunings expected</div>
-              <div className="text-2xl font-bold text-blue-700">{totalTuningsExpected}</div>
-              <div className="text-xs text-blue-500">{tuningsBookedThisYear} booked</div>
-            </div>
-            <div className="bg-amber-50 p-3 rounded">
-              <div className="text-amber-600">Tunings remaining</div>
-              <div className="text-2xl font-bold text-amber-700">{tuningsRemaining}</div>
-              <div className="text-xs text-amber-500">= {daysNeededForTunings} days @ 2/day</div>
-            </div>
-            <div className="bg-pink-50 p-3 rounded">
-              <div className="text-pink-600">Project days</div>
-              <div className="text-2xl font-bold text-pink-700">{projectDaysBooked}</div>
-              <div className="text-xs text-pink-500">booked</div>
-            </div>
-            <div className={`p-3 rounded ${daysFreeForProjects > 20 ? 'bg-green-50' : daysFreeForProjects > 0 ? 'bg-amber-50' : 'bg-red-50'}`}>
-              <div className={daysFreeForProjects > 20 ? 'text-green-600' : daysFreeForProjects > 0 ? 'text-amber-600' : 'text-red-600'}>Free for projects</div>
-              <div className={`text-2xl font-bold ${daysFreeForProjects > 20 ? 'text-green-700' : daysFreeForProjects > 0 ? 'text-amber-700' : 'text-red-700'}`}>{daysFreeForProjects}</div>
-              <div className="text-xs text-gray-500">{unbookedDaysCount} unbooked − {daysNeededForTunings} tunings</div>
-            </div>
+            <div className="bg-gray-50 p-3 rounded"><div className="text-gray-500">Total workdays</div><div className="text-2xl font-bold">{totalWorkdays}</div><div className="text-xs text-gray-400">Mon-Fri all year</div></div>
+            <div className="bg-gray-50 p-3 rounded"><div className="text-gray-500">Days off</div><div className="text-2xl font-bold">{daysOffCount}</div></div>
+            <div className="bg-gray-50 p-3 rounded"><div className="text-gray-500">Available</div><div className="text-2xl font-bold">{availableDays}</div><div className="text-xs text-gray-400">workdays − off</div></div>
+            <div className="bg-gray-50 p-3 rounded"><div className="text-gray-500">Booked</div><div className="text-2xl font-bold">{bookedDays}</div><div className="text-xs text-gray-400">{tuningDaysBooked}T + {faultDaysBooked}F + {projectDaysBooked}P</div></div>
+            <div className="bg-blue-50 p-3 rounded"><div className="text-blue-600">Tunings expected</div><div className="text-2xl font-bold text-blue-700">{totalTuningsExpected}</div><div className="text-xs text-blue-500">{tuningsBookedThisYear} booked</div></div>
+            <div className="bg-amber-50 p-3 rounded"><div className="text-amber-600">Tunings remaining</div><div className="text-2xl font-bold text-amber-700">{tuningsRemaining}</div><div className="text-xs text-amber-500">= {daysNeededForTunings} days @ 2/day</div></div>
+            <div className="bg-pink-50 p-3 rounded"><div className="text-pink-600">Project days</div><div className="text-2xl font-bold text-pink-700">{projectDaysBooked}</div><div className="text-xs text-pink-500">booked</div></div>
+            <div className={`p-3 rounded ${daysFreeForProjects > 20 ? 'bg-green-50' : daysFreeForProjects > 0 ? 'bg-amber-50' : 'bg-red-50'}`}><div className={daysFreeForProjects > 20 ? 'text-green-600' : daysFreeForProjects > 0 ? 'text-amber-600' : 'text-red-600'}>Free for projects</div><div className={`text-2xl font-bold ${daysFreeForProjects > 20 ? 'text-green-700' : daysFreeForProjects > 0 ? 'text-amber-700' : 'text-red-700'}`}>{daysFreeForProjects}</div><div className="text-xs text-gray-500">{unbookedDaysCount} unbooked − {daysNeededForTunings} tunings</div></div>
           </div>
         )}
       </div>
@@ -594,232 +566,343 @@ const CommandCentre = () => {
   const activeProjects = getActiveProjects();
 
   // ============================================================
-  // BOOKING FUNCTIONS
+  // OPTIMISTIC BOOKING FUNCTIONS
   // ============================================================
   
   const addBooking = async (date, customerId, type, price, notes, ticket = null, serviceType = null) => {
-    setSaving(true);
+    const svcType = serviceType || type;
+    const tempId = generateTempId();
+    const newBooking = { id: tempId, date, customerId, type, serviceType: svcType, price: price || 0, status: 'scheduled', notes: notes || '' };
+    
+    // OPTIMISTIC: Update UI immediately
+    setBookings(prev => [...prev, newBooking]);
+    if (ticket) {
+      setTickets(prev => prev.filter(t => t.id !== ticket.id));
+      setSelectedTicketToBook(null);
+    }
+    setSelectedCustomerToBook(null);
+    setCustomQuote('');
+    setJobNotes('');
+    
+    // Background save
+    startBgSave();
     try {
-      const svcType = serviceType || type; // serviceType defaults to type if not specified
       const result = await apiCall('addBooking', { data: { date, customerId, type, serviceType: svcType, price: price || 0, status: 'scheduled', notes: notes || '' } });
-      setBookings([...bookings, { id: result.id, date, customerId, type, serviceType: svcType, price: price || 0, status: 'scheduled', notes: notes || '' }]);
+      setBookings(prev => prev.map(b => b.id === tempId ? { ...b, id: result.id } : b));
       if (ticket) {
         await apiCall('updateTicket', { data: { id: ticket.id, status: 'scheduled', bookingId: result.id } });
-        setTickets(tickets.filter(t => t.id !== ticket.id));
-        setSelectedTicketToBook(null);
       }
-      setSelectedCustomerToBook(null);
-      setCustomQuote('');
-      setJobNotes('');
-      setLastSaved(new Date());
+      endBgSave(true);
     } catch (err) {
-      alert('Failed to save booking: ' + err.message);
-    } finally {
-      setSaving(false);
+      setBookings(prev => prev.filter(b => b.id !== tempId));
+      if (ticket) {
+        setTickets(prev => [...prev, ticket]);
+      }
+      endBgSave(false, err.message);
     }
   };
 
   const removeBooking = async (date, bookingId) => {
     if (!confirm('Remove this booking?')) return;
-    setSaving(true);
+    
+    const bookingToRemove = bookings.find(b => b.id === bookingId);
+    
+    // OPTIMISTIC
+    setBookings(prev => prev.filter(b => b.id !== bookingId));
+    
+    startBgSave();
     try {
       await apiCall('deleteBooking', { bookingId });
-      setBookings(bookings.filter(b => b.id !== bookingId));
       const ticketData = await apiCall('getTickets');
       setTickets(ticketData || []);
-      setLastSaved(new Date());
+      endBgSave(true);
     } catch (err) {
-      alert('Failed to remove booking: ' + err.message);
-    } finally {
-      setSaving(false);
+      if (bookingToRemove) {
+        setBookings(prev => [...prev, bookingToRemove]);
+      }
+      endBgSave(false, err.message);
     }
   };
 
   const updateBookingStatus = async (bookingId, status) => {
-    setSaving(true);
+    const originalBooking = bookings.find(b => b.id === bookingId);
+    const updates = { status };
+    if (status === 'invoiced') updates.invoiceDate = new Date().toISOString().split('T')[0];
+    if (status === 'paid') updates.paidDate = new Date().toISOString().split('T')[0];
+    
+    // OPTIMISTIC
+    setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, ...updates } : b));
+    
+    startBgSave();
     try {
-      const updates = { id: bookingId, status };
-      if (status === 'invoiced') updates.invoiceDate = new Date().toISOString().split('T')[0];
-      if (status === 'paid') updates.paidDate = new Date().toISOString().split('T')[0];
-      await apiCall('updateBooking', { data: updates });
-      setBookings(bookings.map(b => b.id === bookingId ? { ...b, ...updates } : b));
-      setLastSaved(new Date());
+      await apiCall('updateBooking', { data: { id: bookingId, ...updates } });
+      endBgSave(true);
     } catch (err) {
-      alert('Failed to update: ' + err.message);
-    } finally {
-      setSaving(false);
+      if (originalBooking) {
+        setBookings(prev => prev.map(b => b.id === bookingId ? originalBooking : b));
+      }
+      endBgSave(false, err.message);
     }
   };
 
   const toggleDayOff = async (date, reason = '') => {
     const wasOff = isDayOff(date);
-    setSaving(true);
+    const existingDayOff = daysOff.find(d => d.date === date);
+    
+    // OPTIMISTIC
+    if (wasOff) {
+      setDaysOff(prev => prev.filter(d => d.date !== date && d !== date));
+    } else {
+      setDaysOff(prev => [...prev, { date, reason }]);
+    }
+    
+    startBgSave();
     try {
       if (wasOff) {
         await apiCall('removeDayOff', { date });
-        setDaysOff(prev => prev.filter(d => d.date !== date && d !== date));
       } else {
         await apiCall('addDayOff', { data: { date, reason } });
-        setDaysOff(prev => [...prev, { date, reason }]);
       }
-      setLastSaved(new Date());
+      endBgSave(true);
     } catch (err) {
-      alert('Failed to update day off: ' + err.message);
-    } finally {
-      setSaving(false);
+      if (wasOff && existingDayOff) {
+        setDaysOff(prev => [...prev, existingDayOff]);
+      } else if (!wasOff) {
+        setDaysOff(prev => prev.filter(d => d.date !== date));
+      }
+      endBgSave(false, err.message);
     }
   };
 
-  const updateDayOffReason = async (date, reason) => {
-    setSaving(true);
-    try {
-      await apiCall('updateDayOff', { data: { date, reason } });
-      setDaysOff(prev => prev.map(d => d.date === date ? { ...d, reason } : d));
-      setLastSaved(new Date());
-    } catch (err) {
-      alert('Failed to update reason: ' + err.message);
-    } finally {
-      setSaving(false);
-    }
+  // Debounced day off reason update
+  const dayOffReasonTimeoutRef = useRef(null);
+  const updateDayOffReason = (date, reason) => {
+    // OPTIMISTIC - update immediately
+    setDaysOff(prev => prev.map(d => d.date === date ? { ...d, reason } : d));
+    
+    // Debounce the API call
+    if (dayOffReasonTimeoutRef.current) clearTimeout(dayOffReasonTimeoutRef.current);
+    dayOffReasonTimeoutRef.current = setTimeout(async () => {
+      startBgSave();
+      try {
+        await apiCall('updateDayOff', { data: { date, reason } });
+        endBgSave(true);
+      } catch (err) {
+        endBgSave(false, err.message);
+      }
+    }, 500);
   };
 
   const createProject = async () => {
     if (!newProjectName || !newProjectCustomer) return;
-    setSaving(true);
+    
+    const yearStart = newProjectYearStart;
+    const yearEnd = newProjectYearEnd >= newProjectYearStart ? newProjectYearEnd : newProjectYearStart;
+    const tempId = generateTempId();
+    const newProject = { id: tempId, name: newProjectName, customerId: newProjectCustomer.id, customerName: newProjectCustomer.name, estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : null, yearStart, yearEnd, status: 'active', days: [] };
+    
+    // OPTIMISTIC
+    setProjects(prev => [...prev, newProject]);
+    if (currentYear >= yearStart && currentYear <= yearEnd) {
+      setAllocatingProject(newProject);
+    }
+    setShowNewProject(false);
+    setNewProjectName('');
+    setNewProjectCustomer(null);
+    setProjectCustomerSearch('');
+    setNewProjectEstDays('');
+    setNewProjectYearStart(currentYear);
+    setNewProjectYearEnd(currentYear);
+    
+    startBgSave();
     try {
-      const yearStart = newProjectYearStart;
-      const yearEnd = newProjectYearEnd >= newProjectYearStart ? newProjectYearEnd : newProjectYearStart;
       const result = await apiCall('addProject', { data: { customerId: newProjectCustomer.id, name: newProjectName, estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : '', yearStart, yearEnd, status: 'active' } });
-      const newProject = { id: result.id, name: newProjectName, customerId: newProjectCustomer.id, customerName: newProjectCustomer.name, estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : null, yearStart, yearEnd, status: 'active', days: [] };
-      setProjects([...projects, newProject]);
-      // Only start allocating if project includes current year
-      if (currentYear >= yearStart && currentYear <= yearEnd) {
-        setAllocatingProject(newProject);
+      setProjects(prev => prev.map(p => p.id === tempId ? { ...p, id: result.id } : p));
+      if (allocatingProject?.id === tempId) {
+        setAllocatingProject(prev => prev ? { ...prev, id: result.id } : null);
       }
-      setShowNewProject(false);
-      setNewProjectName('');
-      setNewProjectCustomer(null);
-      setProjectCustomerSearch('');
-      setNewProjectEstDays('');
-      setNewProjectYearStart(currentYear);
-      setNewProjectYearEnd(currentYear);
-      setLastSaved(new Date());
+      endBgSave(true);
     } catch (err) {
-      alert('Failed to create project: ' + err.message);
-    } finally {
-      setSaving(false);
+      setProjects(prev => prev.filter(p => p.id !== tempId));
+      if (allocatingProject?.id === tempId) {
+        setAllocatingProject(null);
+      }
+      endBgSave(false, err.message);
     }
   };
 
   const updateProject = async (projectId, updates) => {
-    setSaving(true);
+    const originalProject = projects.find(p => p.id === projectId);
+    
+    // OPTIMISTIC
+    setProjects(prev => prev.map(p => p.id === projectId ? { ...p, ...updates } : p));
+    setEditingProject(null);
+    setShowProjectSummary(null);
+    
+    startBgSave();
     try {
       await apiCall('updateProject', { data: { id: projectId, ...updates } });
-      setProjects(projects.map(p => p.id === projectId ? { ...p, ...updates } : p));
-      setEditingProject(null);
-      setShowProjectSummary(null);
-      setLastSaved(new Date());
+      endBgSave(true);
     } catch (err) {
-      alert('Failed to update project: ' + err.message);
-    } finally {
-      setSaving(false);
+      if (originalProject) {
+        setProjects(prev => prev.map(p => p.id === projectId ? originalProject : p));
+      }
+      endBgSave(false, err.message);
     }
   };
 
   const deleteProject = async (projectId) => {
     if (!confirm('Delete this project? All allocated days will also be removed.')) return;
-    setSaving(true);
+    
+    const projectToDelete = projects.find(p => p.id === projectId);
+    const projectBookingsToDelete = bookings.filter(b => b.projectId === projectId);
+    
+    // OPTIMISTIC
+    setProjects(prev => prev.filter(p => p.id !== projectId));
+    setBookings(prev => prev.filter(b => b.projectId !== projectId));
+    setShowProjectSummary(null);
+    setAllocatingProject(null);
+    
+    startBgSave();
     try {
-      const projectBookings = bookings.filter(b => b.projectId === projectId);
-      for (const booking of projectBookings) {
+      for (const booking of projectBookingsToDelete) {
         await apiCall('deleteBooking', { bookingId: booking.id });
       }
       await apiCall('deleteProject', { projectId });
-      setProjects(projects.filter(p => p.id !== projectId));
-      setBookings(bookings.filter(b => b.projectId !== projectId));
-      setShowProjectSummary(null);
-      setAllocatingProject(null);
-      setLastSaved(new Date());
+      endBgSave(true);
     } catch (err) {
-      alert('Failed to delete project: ' + err.message);
-    } finally {
-      setSaving(false);
+      if (projectToDelete) {
+        setProjects(prev => [...prev, projectToDelete]);
+      }
+      if (projectBookingsToDelete.length > 0) {
+        setBookings(prev => [...prev, ...projectBookingsToDelete]);
+      }
+      endBgSave(false, err.message);
     }
   };
 
   const toggleProjectDay = async (dateStr) => {
     if (!allocatingProject) return;
     const existingBooking = bookings.find(b => b.type === 'project' && b.projectId === allocatingProject.id && b.date === dateStr);
-    setSaving(true);
-    try {
-      if (existingBooking) {
+    
+    if (existingBooking) {
+      // OPTIMISTIC: Remove
+      setBookings(prev => prev.filter(b => b.id !== existingBooking.id));
+      
+      startBgSave();
+      try {
         await apiCall('deleteBooking', { bookingId: existingBooking.id });
-        setBookings(bookings.filter(b => b.id !== existingBooking.id));
-      } else {
-        const result = await apiCall('addBooking', { data: { date: dateStr, customerId: allocatingProject.customerId, type: 'project', serviceType: 'project', projectId: allocatingProject.id, projectName: allocatingProject.name, price: 0, status: 'scheduled', notes: allocatingProject.estimatedDays ? `Est: ${allocatingProject.estimatedDays} days` : allocatingProject.name } });
-        setBookings([...bookings, { id: result.id, date: dateStr, customerId: allocatingProject.customerId, type: 'project', serviceType: 'project', projectId: allocatingProject.id, projectName: allocatingProject.name, estimatedDays: allocatingProject.estimatedDays, price: 0, status: 'scheduled', notes: allocatingProject.estimatedDays ? `Est: ${allocatingProject.estimatedDays} days` : allocatingProject.name }]);
+        endBgSave(true);
+      } catch (err) {
+        setBookings(prev => [...prev, existingBooking]);
+        endBgSave(false, err.message);
       }
-      setLastSaved(new Date());
-    } catch (err) {
-      alert('Failed to update project day: ' + err.message);
-    } finally {
-      setSaving(false);
+    } else {
+      const tempId = generateTempId();
+      const newBooking = { id: tempId, date: dateStr, customerId: allocatingProject.customerId, type: 'project', serviceType: 'project', projectId: allocatingProject.id, projectName: allocatingProject.name, estimatedDays: allocatingProject.estimatedDays, price: 0, status: 'scheduled', notes: allocatingProject.estimatedDays ? `Est: ${allocatingProject.estimatedDays} days` : allocatingProject.name };
+      
+      // OPTIMISTIC: Add
+      setBookings(prev => [...prev, newBooking]);
+      
+      startBgSave();
+      try {
+        const result = await apiCall('addBooking', { data: { date: dateStr, customerId: allocatingProject.customerId, type: 'project', serviceType: 'project', projectId: allocatingProject.id, projectName: allocatingProject.name, price: 0, status: 'scheduled', notes: allocatingProject.estimatedDays ? `Est: ${allocatingProject.estimatedDays} days` : allocatingProject.name } });
+        setBookings(prev => prev.map(b => b.id === tempId ? { ...b, id: result.id } : b));
+        endBgSave(true);
+      } catch (err) {
+        setBookings(prev => prev.filter(b => b.id !== tempId));
+        endBgSave(false, err.message);
+      }
     }
   };
 
   const handleDayClick = async (dateStr, year, month, day) => {
-    if (!isWorkDay(year, month, day)) return; // Weekends - never clickable
+    if (!isWorkDay(year, month, day)) return;
     
-    // If it's a day off and we're not trying to book something, allow toggling it
     if (isDayOff(dateStr)) {
       if (!selectedCustomerToBook && !allocatingProject) {
-        setSelectedDay(dateStr); // Open day panel to toggle day off
+        setSelectedDay(dateStr);
       }
-      return; // Don't allow booking on days off
+      return;
     }
     
     if (allocatingProject) { toggleProjectDay(dateStr); return; }
     if (selectedCustomerToBook) { 
-      // Use 'fault' type if booking from a ticket, otherwise use selected bookingType
       const isFault = selectedTicketToBook !== null;
       const type = isFault ? 'fault' : bookingType;
       const price = customQuote ? parseFloat(customQuote) : (isFault ? DEFAULT_PRICES.fault : 0); 
       
-      // If booking a group, book all customers in the group directly (don't use addBooking which clears state)
       if (selectedGroupToBook && selectedGroupToBook.length > 1) {
-        setSaving(true);
-        try {
-          const newBookings = [];
-          for (const item of selectedGroupToBook) {
-            const svcType = isFault ? bookingType : type;
-            const result = await apiCall('addBooking', { data: { date: dateStr, customerId: item.customer.id, type, serviceType: svcType, price: price || 0, status: 'scheduled', notes: jobNotes || '' } });
-            newBookings.push({ id: result.id, date: dateStr, customerId: item.customer.id, type, serviceType: svcType, price: price || 0, status: 'scheduled', notes: jobNotes || '' });
-          }
-          setBookings([...bookings, ...newBookings]);
-          setLastSaved(new Date());
-        } catch (err) {
-          alert('Failed to save group booking: ' + err.message);
-        } finally {
-          setSaving(false);
-        }
+        const tempBookings = selectedGroupToBook.map(item => ({
+          id: generateTempId(),
+          date: dateStr,
+          customerId: item.customer.id,
+          type,
+          serviceType: isFault ? bookingType : type,
+          price: price || 0,
+          status: 'scheduled',
+          notes: jobNotes || ''
+        }));
+        
+        // OPTIMISTIC
+        setBookings(prev => [...prev, ...tempBookings]);
+        const groupToSave = [...selectedGroupToBook];
         setSelectedGroupToBook(null);
         setSelectedCustomerToBook(null);
         setJobNotes('');
         setCustomQuote('');
+        
+        startBgSave();
+        try {
+          for (let i = 0; i < tempBookings.length; i++) {
+            const item = groupToSave[i];
+            const svcType = isFault ? bookingType : type;
+            const result = await apiCall('addBooking', { data: { date: dateStr, customerId: item.customer.id, type, serviceType: svcType, price: price || 0, status: 'scheduled', notes: jobNotes || '' } });
+            setBookings(prev => prev.map(b => b.id === tempBookings[i].id ? { ...b, id: result.id } : b));
+          }
+          endBgSave(true);
+        } catch (err) {
+          setBookings(prev => prev.filter(b => !tempBookings.some(tb => tb.id === b.id)));
+          endBgSave(false, err.message);
+        }
       } else {
-        // For faults, pass serviceType (OTS/TSC/WS) separately for pricing reference
         await addBooking(dateStr, selectedCustomerToBook.id, type, price, jobNotes, selectedTicketToBook, isFault ? bookingType : null);
       }
     }
     else { setSelectedDay(dateStr); }
   };
 
-  // Ticket functions
+  // ============================================================
+  // TICKET FUNCTIONS (OPTIMISTIC)
+  // ============================================================
+  
   const addTicket = async () => {
     if (!newTicketCustomer || !newTicketDescription) return;
-    setSaving(true);
+    
+    const isNextVisit = newTicketDueDate === 'next-visit';
+    const tempId = generateTempId();
+    const newTicket = { 
+      id: tempId, 
+      customerId: newTicketCustomer, 
+      description: newTicketDescription, 
+      type: newTicketType,
+      dueDate: isNextVisit ? '' : newTicketDueDate,
+      dueType: isNextVisit ? 'next-visit' : 'month',
+      status: 'new', 
+      createdAt: new Date().toISOString() 
+    };
+    
+    // OPTIMISTIC
+    setTickets(prev => [...prev, newTicket]);
+    setShowAddTicket(false);
+    setNewTicketCustomer('');
+    setNewTicketDescription('');
+    setNewTicketType('fault');
+    setNewTicketDueDate('');
+    setCustomerSearch('');
+    
+    startBgSave();
     try {
-      const isNextVisit = newTicketDueDate === 'next-visit';
       const result = await apiCall('addTicket', { data: { 
         customerId: newTicketCustomer, 
         description: newTicketDescription, 
@@ -828,27 +911,11 @@ const CommandCentre = () => {
         dueType: isNextVisit ? 'next-visit' : 'month',
         status: 'new' 
       } });
-      setTickets([...tickets, { 
-        id: result.id, 
-        customerId: newTicketCustomer, 
-        description: newTicketDescription, 
-        type: newTicketType,
-        dueDate: isNextVisit ? '' : newTicketDueDate,
-        dueType: isNextVisit ? 'next-visit' : 'month',
-        status: 'new', 
-        createdAt: new Date().toISOString() 
-      }]);
-      setShowAddTicket(false);
-      setNewTicketCustomer('');
-      setNewTicketDescription('');
-      setNewTicketType('fault');
-      setNewTicketDueDate('');
-      setCustomerSearch('');
-      setLastSaved(new Date());
+      setTickets(prev => prev.map(t => t.id === tempId ? { ...t, id: result.id } : t));
+      endBgSave(true);
     } catch (err) {
-      alert('Failed to add: ' + err.message);
-    } finally {
-      setSaving(false);
+      setTickets(prev => prev.filter(t => t.id !== tempId));
+      endBgSave(false, err.message);
     }
   };
 
@@ -861,23 +928,40 @@ const CommandCentre = () => {
   };
 
   const deleteTicket = async (ticketId) => {
-    setSaving(true);
-    try { await apiCall('deleteTicket', { ticketId }); setTickets(tickets.filter(t => t.id !== ticketId)); setEditingTicket(null); }
-    catch (err) { alert('Failed to delete: ' + err.message); }
-    finally { setSaving(false); }
+    const ticketToDelete = tickets.find(t => t.id === ticketId);
+    
+    // OPTIMISTIC
+    setTickets(prev => prev.filter(t => t.id !== ticketId));
+    setEditingTicket(null);
+    
+    startBgSave();
+    try {
+      await apiCall('deleteTicket', { ticketId });
+      endBgSave(true);
+    } catch (err) {
+      if (ticketToDelete) {
+        setTickets(prev => [...prev, ticketToDelete]);
+      }
+      endBgSave(false, err.message);
+    }
   };
 
   const updateTicket = async (ticket) => {
-    setSaving(true);
+    const originalTicket = tickets.find(t => t.id === ticket.id);
+    
+    // OPTIMISTIC
+    setTickets(prev => prev.map(t => t.id === ticket.id ? ticket : t));
+    setEditingTicket(null);
+    
+    startBgSave();
     try {
       await apiCall('updateTicket', { data: JSON.stringify(ticket) });
-      setTickets(tickets.map(t => t.id === ticket.id ? ticket : t));
-      setEditingTicket(null);
-      setLastSaved(new Date());
+      endBgSave(true);
     } catch (err) {
-      alert('Failed to update: ' + err.message);
-    } finally {
-      setSaving(false);
+      if (originalTicket) {
+        setTickets(prev => prev.map(t => t.id === ticket.id ? originalTicket : t));
+      }
+      endBgSave(false, err.message);
     }
   };
 
@@ -885,8 +969,17 @@ const CommandCentre = () => {
     setEditingTicket({ ...ticket });
   };
 
+  // ============================================================
+  // CUSTOMER FUNCTIONS (OPTIMISTIC)
+  // ============================================================
+
   const updateCustomer = async (customer) => {
-    setSaving(true);
+    const originalCustomer = customers.find(c => c.id === customer.id);
+    
+    // OPTIMISTIC
+    setCustomers(prev => prev.map(c => c.id === customer.id ? customer : c));
+    
+    startBgSave();
     try {
       await apiCall('updateCustomer', { data: JSON.stringify({ 
         id: customer.id,
@@ -898,12 +991,177 @@ const CommandCentre = () => {
         tuningGroup: customer.tuningGroup || '',
         distance: customer.distance
       }) });
-      setCustomers(customers.map(c => c.id === customer.id ? customer : c));
-      setLastSaved(new Date());
+      endBgSave(true);
     } catch (err) {
-      alert('Failed to save: ' + err.message);
-    } finally {
-      setSaving(false);
+      if (originalCustomer) {
+        setCustomers(prev => prev.map(c => c.id === customer.id ? originalCustomer : c));
+      }
+      endBgSave(false, err.message);
+    }
+  };
+
+  const addCustomer = async () => {
+    if (!newCustomerName) return;
+    
+    const tempId = generateTempId();
+    const newCust = { 
+      id: tempId, 
+      name: newCustomerName, 
+      notes: newCustomerAddress,
+      customRate: newCustomerRate ? parseFloat(newCustomerRate) : null,
+      tuningMonths: []
+    };
+    
+    // OPTIMISTIC
+    setCustomers(prev => [...prev, newCust]);
+    setShowAddCustomer(false);
+    setNewCustomerName('');
+    setNewCustomerAddress('');
+    setNewCustomerRate('');
+    setSelectedCustomer(newCust);
+    setEditingCustomer({...newCust});
+    setTuningGroupSearch('');
+    setView('customerDetail');
+    
+    startBgSave();
+    try {
+      const result = await apiCall('addCustomer', { 
+        data: JSON.stringify({
+          name: newCust.name,
+          notes: newCust.notes,
+          customRate: newCust.customRate,
+          tuningMonths: []
+        })
+      });
+      setCustomers(prev => prev.map(c => c.id === tempId ? { ...c, id: result.id } : c));
+      setSelectedCustomer(prev => prev?.id === tempId ? { ...prev, id: result.id } : prev);
+      setEditingCustomer(prev => prev?.id === tempId ? { ...prev, id: result.id } : prev);
+      endBgSave(true);
+    } catch (err) {
+      setCustomers(prev => prev.filter(c => c.id !== tempId));
+      setView('customers');
+      setEditingCustomer(null);
+      setSelectedCustomer(null);
+      endBgSave(false, err.message);
+    }
+  };
+
+  const deleteCustomer = async (customerId) => {
+    const customer = customers.find(c => c.id === customerId);
+    const customerContacts = contacts.filter(c => c.customerId === customerId);
+    const contactCount = customerContacts.length;
+    
+    const message = contactCount > 0 
+      ? `Delete "${customer?.name}" and ${contactCount} associated contact${contactCount > 1 ? 's' : ''}?\n\nThis cannot be undone.`
+      : `Delete "${customer?.name}"?\n\nThis cannot be undone.`;
+    
+    if (!confirm(message)) return;
+    
+    // OPTIMISTIC
+    setCustomers(prev => prev.filter(c => c.id !== customerId));
+    setContacts(prev => prev.filter(c => c.customerId !== customerId));
+    setView('customers');
+    setEditingCustomer(null);
+    setSelectedCustomer(null);
+    
+    startBgSave();
+    try {
+      await apiCall('deleteCustomer', { customerId });
+      endBgSave(true);
+    } catch (err) {
+      if (customer) {
+        setCustomers(prev => [...prev, customer]);
+      }
+      if (customerContacts.length > 0) {
+        setContacts(prev => [...prev, ...customerContacts]);
+      }
+      endBgSave(false, err.message);
+    }
+  };
+
+  // ============================================================
+  // CONTACT FUNCTIONS (OPTIMISTIC)
+  // ============================================================
+
+  const addContact = async () => {
+    if (!editingCustomer || !newContactName) return;
+    
+    const tempId = generateTempId();
+    const newContact = { 
+      id: tempId, 
+      customerId: editingCustomer.id, 
+      name: newContactName, 
+      role: newContactRole, 
+      phone: newContactPhone, 
+      email: newContactEmail,
+      isBookingContact: newContactIsBooking
+    };
+    
+    // OPTIMISTIC
+    setContacts(prev => [...prev, newContact]);
+    setShowAddContact(false);
+    setNewContactName('');
+    setNewContactRole('');
+    setNewContactPhone('');
+    setNewContactEmail('');
+    setNewContactIsBooking(false);
+    
+    startBgSave();
+    try {
+      const result = await apiCall('addContact', { 
+        data: JSON.stringify({
+          customerId: editingCustomer.id,
+          name: newContactName,
+          role: newContactRole,
+          phone: newContactPhone,
+          email: newContactEmail,
+          isBookingContact: newContactIsBooking
+        })
+      });
+      setContacts(prev => prev.map(c => c.id === tempId ? { ...c, id: result.id } : c));
+      endBgSave(true);
+    } catch (err) {
+      setContacts(prev => prev.filter(c => c.id !== tempId));
+      endBgSave(false, err.message);
+    }
+  };
+
+  const saveContact = async (contact) => {
+    const originalContact = contacts.find(c => c.id === contact.id);
+    
+    // OPTIMISTIC
+    setContacts(prev => prev.map(c => c.id === contact.id ? contact : c));
+    setEditingContact(null);
+    
+    startBgSave();
+    try {
+      await apiCall('updateContact', { data: JSON.stringify(contact) });
+      endBgSave(true);
+    } catch (err) {
+      if (originalContact) {
+        setContacts(prev => prev.map(c => c.id === contact.id ? originalContact : c));
+      }
+      endBgSave(false, err.message);
+    }
+  };
+
+  const deleteContact = async (contactId) => {
+    if (!confirm('Delete this contact?')) return;
+    
+    const contactToDelete = contacts.find(c => c.id === contactId);
+    
+    // OPTIMISTIC
+    setContacts(prev => prev.filter(c => c.id !== contactId));
+    
+    startBgSave();
+    try {
+      await apiCall('deleteContact', { id: contactId });
+      endBgSave(true);
+    } catch (err) {
+      if (contactToDelete) {
+        setContacts(prev => [...prev, contactToDelete]);
+      }
+      endBgSave(false, err.message);
     }
   };
 
@@ -923,6 +1181,29 @@ const CommandCentre = () => {
     };
   };
   const stats = getStats();
+
+  // Get unique tuning groups from all customers
+  const existingTuningGroups = [...new Set(customers.map(c => c.tuningGroup).filter(g => g && g.trim()))].sort();
+  
+  const setTuningGroup = async (groupName) => {
+    if (!editingCustomer) return;
+    const updated = { ...editingCustomer, tuningGroup: groupName };
+    setEditingCustomer(updated);
+    setTuningGroupSearch(groupName);
+    setShowGroupDropdown(false);
+    await updateCustomer(updated);
+  };
+
+  const toggleTuningMonth = async (monthIdx) => {
+    if (!editingCustomer) return;
+    const months = editingCustomer.tuningMonths || [];
+    const newMonths = months.includes(monthIdx) 
+      ? months.filter(m => m !== monthIdx) 
+      : [...months, monthIdx].sort((a, b) => a - b);
+    const updated = { ...editingCustomer, tuningMonths: newMonths };
+    setEditingCustomer(updated);
+    await updateCustomer(updated);
+  };
 
   // ============================================================
   // CONFIGURATION SCREEN
@@ -990,7 +1271,6 @@ const CommandCentre = () => {
                   const isToday = dateStr === todayStr;
                   const isPast = dateStr < todayStr;
                   
-                  // Capacity coloring for unbooked workdays
                   const isReservedForTuning = !hasBooking && isWork && !isOff && !isPast && capacityData.reservedDays.has(dateStr);
                   const isPlannedForProject = !hasBooking && isWork && !isOff && !isPast && capacityData.plannedDays.has(dateStr);
                   const isFreeForProjects = !hasBooking && isWork && !isOff && !isPast && !capacityData.reservedDays.has(dateStr) && !capacityData.plannedDays.has(dateStr);
@@ -1049,6 +1329,7 @@ const CommandCentre = () => {
     const d = new Date(year, month - 1, day);
     const dayBookings = getBookingsForDay(date);
     const isOff = isDayOff(date);
+    const [localReason, setLocalReason] = useState(getDayOffReason(date));
 
     return (
       <div className="w-96 bg-white rounded-lg shadow-xl p-5 flex flex-col max-h-[calc(100vh-160px)]">
@@ -1070,8 +1351,11 @@ const CommandCentre = () => {
             <input
               type="text"
               placeholder="Reason (e.g. Bank Holiday, Annual Leave)"
-              defaultValue={getDayOffReason(date)}
-              onBlur={(e) => updateDayOffReason(date, e.target.value)}
+              value={localReason}
+              onChange={(e) => {
+                setLocalReason(e.target.value);
+                updateDayOffReason(date, e.target.value);
+              }}
               className="w-full p-3 border-2 rounded-lg text-lg"
             />
           </div>
@@ -1106,7 +1390,6 @@ const CommandCentre = () => {
                     </div>
                   </div>
                   
-                  {/* Booking Contact for provisional bookings */}
                   {isProvisional && bookingContact && (
                     <div className="mt-3 p-3 bg-yellow-50 rounded-lg border border-yellow-300">
                       <div className="text-sm text-gray-600 mb-1">📞 Contact to confirm:</div>
@@ -1138,14 +1421,9 @@ const CommandCentre = () => {
                         const actualHours = parseFloat(booking.actualHours) || 0;
                         const suggestedBand = Math.max(4, Math.ceil(actualHours || 4));
                         setSelectedBand(suggestedBand);
-                        // Load existing materials from booking
                         let existingMaterials = [];
                         if (booking.materials) {
-                          try {
-                            existingMaterials = JSON.parse(booking.materials);
-                          } catch (e) {
-                            existingMaterials = [];
-                          }
+                          try { existingMaterials = JSON.parse(booking.materials); } catch (e) { existingMaterials = []; }
                         }
                         setInvoiceMaterials(existingMaterials);
                         setNewMaterialDesc('');
@@ -1174,7 +1452,7 @@ const CommandCentre = () => {
   };
 
   // ============================================================
-  // INVOICE CALCULATOR MODAL
+  // INVOICE CALCULATOR MODAL (OPTIMISTIC)
   // ============================================================
   
   const InvoiceCalcModal = () => {
@@ -1182,11 +1460,8 @@ const CommandCentre = () => {
     
     const customer = getCustomerById(showInvoiceCalc.customerId);
     const serviceType = showInvoiceCalc.serviceType || showInvoiceCalc.type || 'TSC';
-    
-    // Auto-suggest time band based on actual hours
     const suggestedBand = Math.max(4, Math.ceil(showInvoiceCalc.actualHours || 4));
     
-    // Calculate totals
     const band = pricing.timeBands.find(b => b.hours === selectedBand);
     const bandPrice = band ? (band[serviceType] || band.TSC || 0) : 0;
     const serviceCharge = customAmount ? parseFloat(customAmount) : bandPrice;
@@ -1202,11 +1477,7 @@ const CommandCentre = () => {
     
     const handleAddMaterial = () => {
       if (newMaterialDesc && newMaterialCost) {
-        setInvoiceMaterials([...invoiceMaterials, { 
-          description: newMaterialDesc, 
-          cost: parseFloat(newMaterialCost) || 0,
-          quantity: newMaterialQty || 1
-        }]);
+        setInvoiceMaterials([...invoiceMaterials, { description: newMaterialDesc, cost: parseFloat(newMaterialCost) || 0, quantity: newMaterialQty || 1 }]);
         setNewMaterialDesc('');
         setNewMaterialCost('');
         setNewMaterialQty(1);
@@ -1214,30 +1485,28 @@ const CommandCentre = () => {
     };
     
     const handleConfirm = async () => {
-      setSaving(true);
+      const originalBooking = bookings.find(b => b.id === showInvoiceCalc.id);
+      const updates = {
+        price: total,
+        status: 'invoiced',
+        materials: JSON.stringify(invoiceMaterials),
+        invoiceDate: new Date().toISOString().split('T')[0]
+      };
+      
+      // OPTIMISTIC
+      setBookings(prev => prev.map(b => b.id === showInvoiceCalc.id ? { ...b, ...updates } : b));
+      setShowInvoiceCalc(null);
+      setSelectedBand(null);
+      
+      startBgSave();
       try {
-        await apiCall('updateBooking', {
-          data: JSON.stringify({
-            id: showInvoiceCalc.id,
-            price: total,
-            status: 'invoiced',
-            materials: JSON.stringify(invoiceMaterials),
-            invoiceDate: new Date().toISOString().split('T')[0]
-          })
-        });
-        
-        setBookings(bookings.map(b => 
-          b.id === showInvoiceCalc.id 
-            ? { ...b, price: total, status: 'invoiced', materials: JSON.stringify(invoiceMaterials), invoiceDate: new Date().toISOString().split('T')[0] }
-            : b
-        ));
-        setShowInvoiceCalc(null);
-        setSelectedBand(null);
-        setLastSaved(new Date());
+        await apiCall('updateBooking', { data: JSON.stringify({ id: showInvoiceCalc.id, ...updates }) });
+        endBgSave(true);
       } catch (err) {
-        alert('Failed to update: ' + err.message);
-      } finally {
-        setSaving(false);
+        if (originalBooking) {
+          setBookings(prev => prev.map(b => b.id === showInvoiceCalc.id ? originalBooking : b));
+        }
+        endBgSave(false, err.message);
       }
     };
     
@@ -1246,18 +1515,12 @@ const CommandCentre = () => {
         <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
           <h2 className="text-2xl font-bold mb-4">📧 Invoice Calculator</h2>
           
-          {/* Job Info */}
           <div className="bg-blue-50 rounded-lg p-4 mb-4">
             <div className="font-bold text-lg">{customer?.name || 'Unknown'}</div>
-            <div className="text-blue-700">
-              Actual time: {showInvoiceCalc.actualHours 
-                ? `${Math.floor(showInvoiceCalc.actualHours)}h ${Math.round((showInvoiceCalc.actualHours % 1) * 60)}m` 
-                : 'Not recorded'}
-            </div>
+            <div className="text-blue-700">Actual time: {showInvoiceCalc.actualHours ? `${Math.floor(showInvoiceCalc.actualHours)}h ${Math.round((showInvoiceCalc.actualHours % 1) * 60)}m` : 'Not recorded'}</div>
             <div className="text-sm text-gray-500">Service: {getJobTypeLabel(serviceType)}</div>
           </div>
           
-          {/* Time band selection */}
           <div className="mb-4">
             <div className="text-sm text-gray-600 mb-2">Select time band:</div>
             <div className="grid grid-cols-5 gap-2 mb-2">
@@ -1265,75 +1528,40 @@ const CommandCentre = () => {
                 const price = b[serviceType] || b.TSC || 0;
                 const isSelected = selectedBand === b.hours && !customAmount;
                 const isSuggested = suggestedBand === b.hours;
-                
                 return (
-                  <button
-                    key={b.hours}
-                    onClick={() => { setSelectedBand(b.hours); setCustomAmount(''); }}
-                    className={`p-3 rounded-lg text-center border-2 transition-all ${
-                      isSelected 
-                        ? 'bg-blue-500 text-white border-blue-500' 
-                        : isSuggested
-                          ? 'bg-blue-100 border-blue-300'
-                          : 'bg-white border-gray-200 hover:border-blue-300'
-                    }`}
-                  >
-                    <div className="font-bold">{b.hours}h</div>
-                    <div className="text-sm">£{price}</div>
+                  <button key={b.hours} onClick={() => { setSelectedBand(b.hours); setCustomAmount(''); }}
+                    className={`p-3 rounded-lg text-center border-2 transition-all ${isSelected ? 'bg-blue-500 text-white border-blue-500' : isSuggested ? 'bg-blue-100 border-blue-300' : 'bg-white border-gray-200 hover:border-blue-300'}`}>
+                    <div className="font-bold">{b.hours}h</div><div className="text-sm">£{price}</div>
                   </button>
                 );
               })}
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-500">Custom:</span>
-              <span className="text-gray-400">£</span>
-              <input
-                type="number"
-                placeholder="Enter amount"
-                value={customAmount}
-                onChange={(e) => setCustomAmount(e.target.value)}
-                className={`flex-1 p-2 border-2 rounded text-sm ${customAmount ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}
-              />
+              <span className="text-sm text-gray-500">Custom:</span><span className="text-gray-400">£</span>
+              <input type="number" placeholder="Enter amount" value={customAmount} onChange={(e) => setCustomAmount(e.target.value)}
+                className={`flex-1 p-2 border-2 rounded text-sm ${customAmount ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`} />
             </div>
           </div>
           
-          {/* Distance premium */}
           <div className="bg-gray-100 rounded-lg p-4 mb-4">
-            <div className="flex justify-between mb-2">
-              <span className="text-gray-600">Distance</span>
-              <span>{showInvoiceCalc.distance || 0} miles</span>
-            </div>
+            <div className="flex justify-between mb-2"><span className="text-gray-600">Distance</span><span>{showInvoiceCalc.distance || 0} miles</span></div>
             <div className="text-sm text-gray-600 mb-2">Select distance band:</div>
             <div className="grid grid-cols-4 gap-2">
               {pricing.distanceBands.map((band, idx) => {
-                const autoSelected = (showInvoiceCalc.distance || 0) >= band.minMiles && 
-                                     (showInvoiceCalc.distance || 0) <= band.maxMiles;
-                const isSelected = selectedDistance !== null 
-                  ? selectedDistance === band.premium 
-                  : autoSelected;
-                
+                const autoSelected = (showInvoiceCalc.distance || 0) >= band.minMiles && (showInvoiceCalc.distance || 0) <= band.maxMiles;
+                const isSelected = selectedDistance !== null ? selectedDistance === band.premium : autoSelected;
                 return (
-                  <button
-                    key={idx}
-                    onClick={() => setSelectedDistance(band.premium)}
-                    className={`p-2 rounded-lg text-center border-2 transition-all ${
-                      isSelected 
-                        ? 'bg-green-500 text-white border-green-500' 
-                        : 'bg-white border-gray-200 hover:border-green-300'
-                    }`}
-                  >
-                    <div className="text-xs">{band.minMiles}-{band.maxMiles}mi</div>
-                    <div className="font-bold">+£{band.premium}</div>
+                  <button key={idx} onClick={() => setSelectedDistance(band.premium)}
+                    className={`p-2 rounded-lg text-center border-2 transition-all ${isSelected ? 'bg-green-500 text-white border-green-500' : 'bg-white border-gray-200 hover:border-green-300'}`}>
+                    <div className="text-xs">{band.minMiles}-{band.maxMiles}mi</div><div className="font-bold">+£{band.premium}</div>
                   </button>
                 );
               })}
             </div>
           </div>
           
-          {/* Materials */}
           <div className="bg-gray-100 rounded-lg p-4 mb-4">
             <div className="text-sm text-gray-600 mb-2">Materials / Parts</div>
-            
             {invoiceMaterials.length > 0 && (
               <div className="space-y-1 mb-3">
                 {invoiceMaterials.map((mat, idx) => {
@@ -1351,63 +1579,24 @@ const CommandCentre = () => {
                 })}
               </div>
             )}
-            
             <div className="flex gap-2">
-              <input
-                type="text"
-                placeholder="Description"
-                value={newMaterialDesc}
-                onChange={(e) => setNewMaterialDesc(e.target.value)}
-                className="flex-1 p-2 border rounded text-sm"
-              />
-              <input
-                type="number"
-                placeholder="Qty"
-                value={newMaterialQty}
-                onChange={(e) => setNewMaterialQty(parseInt(e.target.value) || 1)}
-                className="w-14 p-2 border rounded text-sm text-center"
-                min="1"
-              />
-              <input
-                type="number"
-                placeholder="£"
-                value={newMaterialCost}
-                onChange={(e) => setNewMaterialCost(e.target.value)}
-                className="w-20 p-2 border rounded text-sm"
-                step="0.01"
-              />
+              <input type="text" placeholder="Description" value={newMaterialDesc} onChange={(e) => setNewMaterialDesc(e.target.value)} className="flex-1 p-2 border rounded text-sm" />
+              <input type="number" placeholder="Qty" value={newMaterialQty} onChange={(e) => setNewMaterialQty(parseInt(e.target.value) || 1)} className="w-14 p-2 border rounded text-sm text-center" min="1" />
+              <input type="number" placeholder="£" value={newMaterialCost} onChange={(e) => setNewMaterialCost(e.target.value)} className="w-20 p-2 border rounded text-sm" step="0.01" />
               <button onClick={handleAddMaterial} className="px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">+</button>
             </div>
           </div>
           
-          {/* Total breakdown */}
           <div className="border-t-2 pt-4 mb-4">
-            <div className="flex justify-between text-lg">
-              <span>Service {customAmount ? '(custom)' : `(${selectedBand}h)`}</span>
-              <span>£{serviceCharge.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between text-lg">
-              <span>Distance</span>
-              <span>+£{distancePremium}</span>
-            </div>
-            {materialsTotal > 0 && (
-              <div className="flex justify-between text-lg">
-                <span>Materials</span>
-                <span>+£{materialsTotal.toFixed(2)}</span>
-              </div>
-            )}
-            <div className="flex justify-between text-2xl font-bold mt-2 pt-2 border-t">
-              <span>Total</span>
-              <span className="text-green-600">£{total.toFixed(2)}</span>
-            </div>
+            <div className="flex justify-between text-lg"><span>Service {customAmount ? '(custom)' : `(${selectedBand}h)`}</span><span>£{serviceCharge.toFixed(2)}</span></div>
+            <div className="flex justify-between text-lg"><span>Distance</span><span>+£{distancePremium}</span></div>
+            {materialsTotal > 0 && <div className="flex justify-between text-lg"><span>Materials</span><span>+£{materialsTotal.toFixed(2)}</span></div>}
+            <div className="flex justify-between text-2xl font-bold mt-2 pt-2 border-t"><span>Total</span><span className="text-green-600">£{total.toFixed(2)}</span></div>
           </div>
           
-          {/* Action buttons */}
           <div className="flex gap-3">
             <button onClick={() => { setShowInvoiceCalc(null); setSelectedBand(null); }} className="flex-1 py-3 bg-gray-200 rounded-lg font-medium">Cancel</button>
-            <button onClick={handleConfirm} disabled={saving} className="flex-1 py-3 bg-green-500 text-white rounded-lg font-bold text-lg disabled:opacity-50">
-              {saving ? '...' : `✓ Confirm £${total.toFixed(2)}`}
-            </button>
+            <button onClick={handleConfirm} className="flex-1 py-3 bg-green-500 text-white rounded-lg font-bold text-lg">✓ Confirm £{total.toFixed(2)}</button>
           </div>
         </div>
       </div>
@@ -1448,12 +1637,7 @@ const CommandCentre = () => {
             <div className="flex-1">
               <div className="text-sm text-gray-500">{project.customerName}</div>
               {isEditing ? (
-                <input 
-                  type="text" 
-                  value={editName} 
-                  onChange={(e) => setEditName(e.target.value)} 
-                  className="text-2xl font-bold w-full border-2 border-purple-300 rounded px-2 py-1 mt-1"
-                />
+                <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} className="text-2xl font-bold w-full border-2 border-purple-300 rounded px-2 py-1 mt-1" />
               ) : (
                 <h2 className="text-2xl font-bold">{project.name}</h2>
               )}
@@ -1467,27 +1651,17 @@ const CommandCentre = () => {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm text-gray-600 block mb-1">Estimated Days</label>
-                  <input 
-                    type="number" 
-                    value={editEstDays} 
-                    onChange={(e) => setEditEstDays(e.target.value)} 
-                    className="w-full p-2 border rounded"
-                    placeholder="e.g. 40"
-                  />
+                  <input type="number" value={editEstDays} onChange={(e) => setEditEstDays(e.target.value)} className="w-full p-2 border rounded" placeholder="e.g. 40" />
                 </div>
                 <div>
                   <label className="text-sm text-gray-600 block mb-1">Year Range</label>
                   <div className="flex gap-2 items-center">
                     <select value={editYearStart} onChange={(e) => { setEditYearStart(parseInt(e.target.value)); if (parseInt(e.target.value) > editYearEnd) setEditYearEnd(parseInt(e.target.value)); }} className="flex-1 p-2 border rounded bg-white">
-                      {[currentYear - 1, currentYear, currentYear + 1, currentYear + 2, currentYear + 3].map(y => (
-                        <option key={y} value={y}>{y}</option>
-                      ))}
+                      {[currentYear - 1, currentYear, currentYear + 1, currentYear + 2, currentYear + 3].map(y => <option key={y} value={y}>{y}</option>)}
                     </select>
                     <span className="text-gray-500">→</span>
                     <select value={editYearEnd} onChange={(e) => setEditYearEnd(parseInt(e.target.value))} className="flex-1 p-2 border rounded bg-white">
-                      {[currentYear - 1, currentYear, currentYear + 1, currentYear + 2, currentYear + 3].filter(y => y >= editYearStart).map(y => (
-                        <option key={y} value={y}>{y}</option>
-                      ))}
+                      {[currentYear - 1, currentYear, currentYear + 1, currentYear + 2, currentYear + 3].filter(y => y >= editYearStart).map(y => <option key={y} value={y}>{y}</option>)}
                     </select>
                   </div>
                 </div>
@@ -1527,16 +1701,13 @@ const CommandCentre = () => {
   };
 
   // ============================================================
-  // REPORTS VIEW - Comprehensive Dashboard
+  // REPORTS VIEW
   // ============================================================
   
   const ReportsView = () => {
     const [reportType, setReportType] = useState('summary');
     const [selectedYear, setSelectedYear] = useState(currentYear);
     
-    // ========== DATA CALCULATIONS ==========
-    
-    // Monthly income data
     const getMonthlyIncome = () => {
       const months = Array(12).fill(0).map((_, i) => ({ month: i, income: 0, count: 0, tunings: 0, faults: 0, projects: 0 }));
       bookings.filter(b => {
@@ -1553,56 +1724,20 @@ const CommandCentre = () => {
       return months;
     };
     
-    // Outstanding invoices
     const getOutstanding = () => {
       return bookings.filter(b => b.status === 'invoiced').map(b => ({
-        ...b,
-        customer: getCustomerById(b.customerId),
+        ...b, customer: getCustomerById(b.customerId),
         daysSince: Math.floor((new Date() - new Date(b.invoiceDate || b.date)) / (1000 * 60 * 60 * 24))
       })).sort((a, b) => b.daysSince - a.daysSince);
     };
     
-    // Awaiting invoice
     const getAwaitingInvoice = () => {
       return bookings.filter(b => b.status === 'completed').map(b => ({
-        ...b,
-        customer: getCustomerById(b.customerId),
+        ...b, customer: getCustomerById(b.customerId),
         daysSince: Math.floor((new Date() - parseLocalDate(b.date)) / (1000 * 60 * 60 * 24))
       })).sort((a, b) => b.daysSince - a.daysSince);
     };
     
-    // Customer revenue ranking
-    const getCustomerRevenue = () => {
-      const revenue = {};
-      bookings.filter(b => {
-        const d = parseLocalDate(b.date);
-        return d.getFullYear() === selectedYear && (b.status === 'paid' || b.status === 'invoiced' || b.status === 'completed');
-      }).forEach(b => {
-        if (!revenue[b.customerId]) revenue[b.customerId] = { paid: 0, invoiced: 0, completed: 0, count: 0 };
-        revenue[b.customerId].count++;
-        if (b.status === 'paid') revenue[b.customerId].paid += parseFloat(b.price) || 0;
-        else if (b.status === 'invoiced') revenue[b.customerId].invoiced += parseFloat(b.price) || 0;
-        else if (b.status === 'completed') revenue[b.customerId].completed += parseFloat(b.price) || 0;
-      });
-      return Object.entries(revenue)
-        .map(([id, data]) => ({ customer: getCustomerById(id), ...data, total: data.paid + data.invoiced + data.completed }))
-        .filter(r => r.customer)
-        .sort((a, b) => b.total - a.total);
-    };
-    
-    // Project profitability
-    const getProjectProfitability = () => {
-      return activeProjects.map(p => {
-        const hourlyRate = 45;
-        const labourCost = p.totalHours * hourlyRate;
-        const totalCost = labourCost + p.materialsCost;
-        const quotedTotal = parseFloat(p.quotedTotal) || 0;
-        const profit = quotedTotal - totalCost;
-        return { ...p, labourCost, totalCost, profit, profitMargin: quotedTotal > 0 ? (profit / quotedTotal * 100) : 0 };
-      });
-    };
-    
-    // Year summary
     const getYearSummary = () => {
       const yearBookings = bookings.filter(b => parseInt(b.date.split('-')[0]) === selectedYear);
       const paid = yearBookings.filter(b => b.status === 'paid');
@@ -1611,132 +1746,19 @@ const CommandCentre = () => {
       const tunings = yearBookings.filter(b => b.type === 'OTS' || b.type === 'TSC' || b.type === 'WS');
       const faults = yearBookings.filter(b => b.type === 'fault');
       const projectDays = yearBookings.filter(b => b.type === 'project');
-      
       return {
         totalJobs: yearBookings.length,
-        paidJobs: paid.length,
-        paidTotal: paid.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0),
-        invoicedJobs: invoiced.length,
-        invoicedTotal: invoiced.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0),
-        completedJobs: completed.length,
-        completedTotal: completed.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0),
-        tuningCount: tunings.length,
-        faultCount: faults.length,
-        projectDayCount: projectDays.length
+        paidJobs: paid.length, paidTotal: paid.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0),
+        invoicedJobs: invoiced.length, invoicedTotal: invoiced.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0),
+        completedJobs: completed.length, completedTotal: completed.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0),
+        tuningCount: tunings.length, faultCount: faults.length, projectDayCount: projectDays.length
       };
     };
     
-    // Tunings overdue (months passed without tuning)
-    const getTuningsOverdue = () => {
-      const now = new Date();
-      const currentMonth = now.getMonth();
-      const overdue = [];
-      
-      customers.forEach(c => {
-        if (!c.tuningMonths || c.tuningMonths.length === 0) return;
-        
-        // Check each tuning month
-        c.tuningMonths.forEach(month => {
-          // If this month has passed this year
-          if (month < currentMonth) {
-            // Check if there's a tuning booked/done for this month this year
-            const hasTuning = bookings.some(b => {
-              const d = parseLocalDate(b.date);
-              return b.customerId === c.id && 
-                     d.getFullYear() === currentYear && 
-                     d.getMonth() === month &&
-                     (b.type === 'OTS' || b.type === 'TSC' || b.type === 'WS');
-            });
-            
-            if (!hasTuning) {
-              overdue.push({ customer: c, dueMonth: month, monthName: monthNames[month] });
-            }
-          }
-        });
-      });
-      
-      return overdue.sort((a, b) => a.dueMonth - b.dueMonth);
-    };
-    
-    // Tunings due next month
-    const getTuningsDueNextMonth = () => {
-      const nextMonth = (new Date().getMonth() + 1) % 12;
-      return customers.filter(c => (c.tuningMonths || []).includes(nextMonth))
-        .filter(c => {
-          // Check if already booked for next month
-          return !bookings.some(b => {
-            const d = parseLocalDate(b.date);
-            return b.customerId === c.id && 
-                   d.getMonth() === nextMonth &&
-                   d.getFullYear() === (nextMonth === 0 ? currentYear + 1 : currentYear) &&
-                   (b.type === 'OTS' || b.type === 'TSC' || b.type === 'WS');
-          });
-        });
-    };
-    
-    // Hours by customer (from time entries)
-    const getHoursByCustomer = () => {
-      const hours = {};
-      // Would need timeEntries data - for now use booking estimates
-      bookings.filter(b => parseInt(b.date.split('-')[0]) === selectedYear).forEach(b => {
-        if (!hours[b.customerId]) hours[b.customerId] = 0;
-        // Estimate hours based on service type
-        if (b.type === 'OTS') hours[b.customerId] += 6;
-        else if (b.type === 'TSC') hours[b.customerId] += 5;
-        else if (b.type === 'WS') hours[b.customerId] += 4;
-        else if (b.type === 'fault') hours[b.customerId] += 3;
-        else if (b.type === 'project') hours[b.customerId] += 7;
-      });
-      return Object.entries(hours)
-        .map(([id, hrs]) => ({ customer: getCustomerById(id), hours: hrs }))
-        .filter(r => r.customer)
-        .sort((a, b) => b.hours - a.hours);
-    };
-    
-    // Utilisation rate
-    const getUtilisation = () => {
-      const workdaysInYear = Array(12).fill(0).map((_, month) => {
-        let count = 0;
-        const daysInMonth = new Date(selectedYear, month + 1, 0).getDate();
-        for (let d = 1; d <= daysInMonth; d++) {
-          const dow = new Date(selectedYear, month, d).getDay();
-          if (dow >= 1 && dow <= 5) count++;
-        }
-        return count;
-      });
-      
-      const totalWorkdays = workdaysInYear.reduce((a, b) => a + b, 0);
-      const daysOffCount = daysOff.filter(d => d && d.date && parseInt(d.date.split('-')[0]) === selectedYear).length;
-      const availableDays = totalWorkdays - daysOffCount;
-      
-      const bookedDays = new Set(bookings.filter(b => parseInt(b.date.split('-')[0]) === selectedYear).map(b => b.date)).size;
-      
-      return {
-        totalWorkdays,
-        daysOffCount,
-        availableDays,
-        bookedDays,
-        utilisation: availableDays > 0 ? Math.round((bookedDays / availableDays) * 100) : 0
-      };
-    };
-    
-    // Customers with no tuning schedule
-    const getNoScheduleCustomers = () => {
-      return customers.filter(c => !c.tuningMonths || c.tuningMonths.length === 0);
-    };
-    
-    // ========== COMPUTED DATA ==========
     const monthlyData = getMonthlyIncome();
     const outstanding = getOutstanding();
     const awaitingInvoice = getAwaitingInvoice();
-    const customerRevenue = getCustomerRevenue();
-    const projectProfit = getProjectProfitability();
     const yearSummary = getYearSummary();
-    const tuningsOverdue = getTuningsOverdue();
-    const tuningsNextMonth = getTuningsDueNextMonth();
-    const hoursByCustomer = getHoursByCustomer();
-    const utilisation = getUtilisation();
-    const noScheduleCustomers = getNoScheduleCustomers();
     const maxMonthlyIncome = Math.max(...monthlyData.map(m => m.income), 1);
     
     const reportTabs = [
@@ -1744,13 +1766,6 @@ const CommandCentre = () => {
       { id: 'monthly', label: '📈 Monthly', count: null },
       { id: 'outstanding', label: '⏳ Outstanding', count: outstanding.length },
       { id: 'awaiting', label: '📝 To Invoice', count: awaitingInvoice.length },
-      { id: 'overdue', label: '⚠️ Overdue', count: tuningsOverdue.length },
-      { id: 'upcoming', label: '📅 Upcoming', count: tuningsNextMonth.length },
-      { id: 'customers', label: '👥 Customers', count: null },
-      { id: 'hours', label: '⏱️ Hours', count: null },
-      { id: 'utilisation', label: '📊 Utilisation', count: null },
-      { id: 'projects', label: '🔧 Projects', count: activeProjects.length },
-      { id: 'noschedule', label: '❓ No Schedule', count: noScheduleCustomers.length }
     ];
     
     return (
@@ -1758,27 +1773,20 @@ const CommandCentre = () => {
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-2xl font-bold">📊 Reports Dashboard</h2>
           <select value={selectedYear} onChange={(e) => setSelectedYear(parseInt(e.target.value))} className="px-4 py-2 border-2 rounded-lg bg-white text-lg">
-            {[currentYear - 1, currentYear, currentYear + 1].map(y => (
-              <option key={y} value={y}>{y}</option>
-            ))}
+            {[currentYear - 1, currentYear, currentYear + 1].map(y => <option key={y} value={y}>{y}</option>)}
           </select>
         </div>
         
-        {/* Report Type Tabs */}
         <div className="flex gap-2 mb-4 flex-wrap">
           {reportTabs.map(tab => (
-            <button 
-              key={tab.id} 
-              onClick={() => setReportType(tab.id)} 
-              className={`px-3 py-2 rounded-lg font-medium text-sm ${reportType === tab.id ? 'bg-blue-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
-            >
+            <button key={tab.id} onClick={() => setReportType(tab.id)} 
+              className={`px-3 py-2 rounded-lg font-medium text-sm ${reportType === tab.id ? 'bg-blue-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}>
               {tab.label} {tab.count !== null && tab.count > 0 && <span className="ml-1 bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full">{tab.count}</span>}
             </button>
           ))}
         </div>
         
         <div className="flex-1 overflow-y-auto">
-          {/* ========== YEAR SUMMARY ========== */}
           {reportType === 'summary' && (
             <div>
               <h3 className="text-xl font-bold mb-4">Year Summary {selectedYear}</h3>
@@ -1796,26 +1804,6 @@ const CommandCentre = () => {
                   <div className="text-amber-600 mt-2">✓ Done ({yearSummary.completedJobs})</div>
                 </div>
               </div>
-              
-              <div className="grid grid-cols-4 gap-4 mb-6">
-                <div className="bg-gray-100 rounded-lg p-4 text-center">
-                  <div className="text-2xl font-bold">{yearSummary.tuningCount}</div>
-                  <div className="text-sm text-gray-600">Tunings</div>
-                </div>
-                <div className="bg-gray-100 rounded-lg p-4 text-center">
-                  <div className="text-2xl font-bold">{yearSummary.faultCount}</div>
-                  <div className="text-sm text-gray-600">Faults</div>
-                </div>
-                <div className="bg-gray-100 rounded-lg p-4 text-center">
-                  <div className="text-2xl font-bold">{yearSummary.projectDayCount}</div>
-                  <div className="text-sm text-gray-600">Project Days</div>
-                </div>
-                <div className="bg-gray-100 rounded-lg p-4 text-center">
-                  <div className="text-2xl font-bold">{utilisation.utilisation}%</div>
-                  <div className="text-sm text-gray-600">Utilisation</div>
-                </div>
-              </div>
-              
               <div className="p-4 bg-gray-800 text-white rounded-lg">
                 <div className="text-3xl font-bold">{formatCurrency(yearSummary.paidTotal + yearSummary.invoicedTotal + yearSummary.completedTotal)}</div>
                 <div className="text-gray-300">Total Pipeline for {selectedYear}</div>
@@ -1823,7 +1811,6 @@ const CommandCentre = () => {
             </div>
           )}
           
-          {/* ========== MONTHLY INCOME ========== */}
           {reportType === 'monthly' && (
             <div>
               <h3 className="text-xl font-bold mb-4">Monthly Income {selectedYear}</h3>
@@ -1832,34 +1819,16 @@ const CommandCentre = () => {
                   <div key={i} className="flex items-center gap-4">
                     <div className="w-12 text-sm font-medium">{monthNames[i].slice(0, 3)}</div>
                     <div className="flex-1 bg-gray-100 rounded-full h-10 overflow-hidden">
-                      <div 
-                        className="bg-green-500 h-full rounded-full flex items-center justify-end pr-3"
-                        style={{ width: `${Math.max((m.income / maxMonthlyIncome) * 100, m.income > 0 ? 15 : 0)}%` }}
-                      >
+                      <div className="bg-green-500 h-full rounded-full flex items-center justify-end pr-3" style={{ width: `${Math.max((m.income / maxMonthlyIncome) * 100, m.income > 0 ? 15 : 0)}%` }}>
                         {m.income > 0 && <span className="text-white text-sm font-bold">{formatCurrency(m.income)}</span>}
                       </div>
-                    </div>
-                    <div className="w-32 text-right text-sm">
-                      <span className="text-blue-600">{m.tunings}T</span> / <span className="text-orange-600">{m.faults}F</span> / <span className="text-purple-600">{m.projects}P</span>
                     </div>
                   </div>
                 ))}
               </div>
-              <div className="mt-6 p-4 bg-green-100 rounded-lg flex justify-between items-center">
-                <div>
-                  <div className="text-3xl font-bold text-green-700">{formatCurrency(monthlyData.reduce((sum, m) => sum + m.income, 0))}</div>
-                  <div className="text-green-600">Total for {selectedYear}</div>
-                </div>
-                <div className="text-right text-sm">
-                  <div className="text-blue-600">{monthlyData.reduce((sum, m) => sum + m.tunings, 0)} Tunings</div>
-                  <div className="text-orange-600">{monthlyData.reduce((sum, m) => sum + m.faults, 0)} Faults</div>
-                  <div className="text-purple-600">{monthlyData.reduce((sum, m) => sum + m.projects, 0)} Project Days</div>
-                </div>
-              </div>
             </div>
           )}
           
-          {/* ========== OUTSTANDING INVOICES ========== */}
           {reportType === 'outstanding' && (
             <div>
               <h3 className="text-xl font-bold mb-4">Outstanding Invoices ({outstanding.length})</h3>
@@ -1879,15 +1848,11 @@ const CommandCentre = () => {
                       </div>
                     </div>
                   ))}
-                  <div className="mt-4 p-4 bg-blue-100 rounded-lg">
-                    <div className="text-2xl font-bold text-blue-700">Total: {formatCurrency(outstanding.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0))}</div>
-                  </div>
                 </div>
               )}
             </div>
           )}
           
-          {/* ========== AWAITING INVOICE ========== */}
           {reportType === 'awaiting' && (
             <div>
               <h3 className="text-xl font-bold mb-4">Needs Invoicing ({awaitingInvoice.length})</h3>
@@ -1899,196 +1864,12 @@ const CommandCentre = () => {
                     <div key={b.id} className={`flex justify-between items-center p-4 rounded-lg border-l-4 ${b.daysSince > 14 ? 'bg-red-50 border-red-500' : b.daysSince > 7 ? 'bg-amber-50 border-amber-500' : 'bg-gray-50 border-gray-300'}`}>
                       <div>
                         <div className="font-bold">{b.customer?.name || 'Unknown'}</div>
-                        <div className="text-sm text-gray-500">{parseLocalDate(b.date).toLocaleDateString('en-GB')} • {getJobTypeLabel(b.type)} • {b.daysSince} days ago</div>
+                        <div className="text-sm text-gray-500">{parseLocalDate(b.date).toLocaleDateString('en-GB')} • {getJobTypeLabel(b.type)}</div>
                       </div>
                       <div className="text-right">
                         <div className="font-bold text-lg">{formatCurrency(b.price)}</div>
                         <button onClick={() => updateBookingStatus(b.id, 'invoiced')} className="text-sm bg-amber-500 text-white px-3 py-1 rounded mt-1">📧 Invoice</button>
                       </div>
-                    </div>
-                  ))}
-                  <div className="mt-4 p-4 bg-amber-100 rounded-lg">
-                    <div className="text-2xl font-bold text-amber-700">Total: {formatCurrency(awaitingInvoice.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0))}</div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-          
-          {/* ========== TUNINGS OVERDUE ========== */}
-          {reportType === 'overdue' && (
-            <div>
-              <h3 className="text-xl font-bold mb-4">Overdue Tunings ({tuningsOverdue.length})</h3>
-              {tuningsOverdue.length === 0 ? (
-                <div className="text-center py-12 text-gray-500"><div className="text-5xl mb-4">👍</div>No overdue tunings!</div>
-              ) : (
-                <div className="space-y-2">
-                  {tuningsOverdue.map((item, i) => (
-                    <div key={i} onClick={() => { setSelectedCustomerToBook(item.customer); setBookingType('OTS'); setView('planner'); }} className="flex justify-between items-center p-4 bg-red-50 rounded-lg border-l-4 border-red-500 cursor-pointer hover:bg-red-100">
-                      <div>
-                        <div className="font-bold">{item.customer.name}</div>
-                        <div className="text-sm text-red-600">Due: {item.monthName} {currentYear}</div>
-                      </div>
-                      <div className="text-red-600 font-bold">⚠️ Overdue</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          
-          {/* ========== UPCOMING TUNINGS ========== */}
-          {reportType === 'upcoming' && (
-            <div>
-              <h3 className="text-xl font-bold mb-4">Due Next Month - {monthNames[(new Date().getMonth() + 1) % 12]} ({tuningsNextMonth.length})</h3>
-              {tuningsNextMonth.length === 0 ? (
-                <div className="text-center py-12 text-gray-500"><div className="text-5xl mb-4">📅</div>All booked for next month!</div>
-              ) : (
-                <div className="space-y-2">
-                  {tuningsNextMonth.map(c => (
-                    <div key={c.id} onClick={() => { setSelectedCustomerToBook(c); setBookingType('OTS'); setView('planner'); }} className="flex justify-between items-center p-4 bg-amber-50 rounded-lg border-l-4 border-amber-400 cursor-pointer hover:bg-amber-100">
-                      <div>
-                        <div className="font-bold">{c.name}</div>
-                        <div className="text-sm text-gray-500">Rate: {formatCurrency(c.customRate || DEFAULT_PRICES.tuning_full)}</div>
-                      </div>
-                      <div className="text-amber-600">📞 Book →</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          
-          {/* ========== TOP CUSTOMERS ========== */}
-          {reportType === 'customers' && (
-            <div>
-              <h3 className="text-xl font-bold mb-4">Customer Revenue {selectedYear}</h3>
-              {customerRevenue.length === 0 ? (
-                <div className="text-center py-12 text-gray-500">No revenue data for {selectedYear}</div>
-              ) : (
-                <div className="space-y-2">
-                  {customerRevenue.slice(0, 25).map((r, i) => (
-                    <div key={r.customer.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${i < 3 ? 'bg-yellow-400 text-yellow-900' : 'bg-gray-200'}`}>{i + 1}</div>
-                        <div>
-                          <div className="font-bold">{r.customer.name}</div>
-                          <div className="text-xs text-gray-500">{r.count} jobs</div>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-bold text-green-600">{formatCurrency(r.total)}</div>
-                        <div className="text-xs">
-                          {r.paid > 0 && <span className="text-green-600">£{r.paid} paid</span>}
-                          {r.invoiced > 0 && <span className="text-blue-600 ml-2">£{r.invoiced} inv</span>}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          
-          {/* ========== HOURS BY CUSTOMER ========== */}
-          {reportType === 'hours' && (
-            <div>
-              <h3 className="text-xl font-bold mb-4">Hours by Customer {selectedYear} (Estimated)</h3>
-              {hoursByCustomer.length === 0 ? (
-                <div className="text-center py-12 text-gray-500">No time data for {selectedYear}</div>
-              ) : (
-                <div className="space-y-2">
-                  {hoursByCustomer.slice(0, 25).map((r, i) => (
-                    <div key={r.customer.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                      <div className="font-medium">{r.customer.name}</div>
-                      <div className="font-bold text-blue-600">{r.hours} hrs</div>
-                    </div>
-                  ))}
-                  <div className="mt-4 p-4 bg-blue-100 rounded-lg">
-                    <div className="text-2xl font-bold text-blue-700">{hoursByCustomer.reduce((sum, r) => sum + r.hours, 0)} Total Hours</div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-          
-          {/* ========== UTILISATION ========== */}
-          {reportType === 'utilisation' && (
-            <div>
-              <h3 className="text-xl font-bold mb-4">Capacity & Utilisation {selectedYear}</h3>
-              <div className="grid grid-cols-2 gap-4 mb-6">
-                <div className="bg-gray-100 rounded-lg p-6 text-center">
-                  <div className="text-4xl font-bold">{utilisation.totalWorkdays}</div>
-                  <div className="text-gray-600">Total Workdays (Mon-Fri)</div>
-                </div>
-                <div className="bg-yellow-100 rounded-lg p-6 text-center">
-                  <div className="text-4xl font-bold text-yellow-700">{utilisation.daysOffCount}</div>
-                  <div className="text-yellow-600">Days Off</div>
-                </div>
-                <div className="bg-blue-100 rounded-lg p-6 text-center">
-                  <div className="text-4xl font-bold text-blue-700">{utilisation.availableDays}</div>
-                  <div className="text-blue-600">Available Days</div>
-                </div>
-                <div className="bg-green-100 rounded-lg p-6 text-center">
-                  <div className="text-4xl font-bold text-green-700">{utilisation.bookedDays}</div>
-                  <div className="text-green-600">Booked Days</div>
-                </div>
-              </div>
-              <div className="p-6 bg-gray-800 text-white rounded-lg text-center">
-                <div className="text-5xl font-bold">{utilisation.utilisation}%</div>
-                <div className="text-gray-300 mt-2">Utilisation Rate</div>
-                <div className="mt-4 bg-gray-700 rounded-full h-4 overflow-hidden">
-                  <div className="bg-green-500 h-full" style={{ width: `${utilisation.utilisation}%` }}></div>
-                </div>
-              </div>
-            </div>
-          )}
-          
-          {/* ========== PROJECTS ========== */}
-          {reportType === 'projects' && (
-            <div>
-              <h3 className="text-xl font-bold mb-4">Project Profitability</h3>
-              {projectProfit.length === 0 ? (
-                <div className="text-center py-12 text-gray-500"><div className="text-5xl mb-4">🔧</div>No active projects</div>
-              ) : (
-                <div className="space-y-3">
-                  {projectProfit.map(p => (
-                    <div key={p.id} className="p-4 bg-purple-50 rounded-lg border-l-4 border-purple-500">
-                      <div className="flex justify-between items-start mb-2">
-                        <div>
-                          <div className="text-sm text-gray-500">{p.customerName}</div>
-                          <div className="font-bold text-lg">{p.name}</div>
-                        </div>
-                        <div className={`text-xl font-bold ${p.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                          {p.profit >= 0 ? '+' : ''}{formatCurrency(p.profit)}
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-5 gap-2 text-sm">
-                        <div><span className="text-gray-500">Days:</span> <span className="font-bold">{p.days.length}</span></div>
-                        <div><span className="text-gray-500">Hours:</span> <span className="font-bold">{p.totalHours.toFixed(1)}</span></div>
-                        <div><span className="text-gray-500">Labour:</span> <span className="font-bold">{formatCurrency(p.labourCost)}</span></div>
-                        <div><span className="text-gray-500">Materials:</span> <span className="font-bold">{formatCurrency(p.materialsCost)}</span></div>
-                        <div><span className="text-gray-500">Quoted:</span> <span className="font-bold">{formatCurrency(p.quotedTotal || 0)}</span></div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          
-          {/* ========== NO SCHEDULE CUSTOMERS ========== */}
-          {reportType === 'noschedule' && (
-            <div>
-              <h3 className="text-xl font-bold mb-4">Customers Without Tuning Schedule ({noScheduleCustomers.length})</h3>
-              {noScheduleCustomers.length === 0 ? (
-                <div className="text-center py-12 text-gray-500"><div className="text-5xl mb-4">✅</div>All customers have schedules!</div>
-              ) : (
-                <div className="space-y-2">
-                  {noScheduleCustomers.map(c => (
-                    <div key={c.id} onClick={() => { setSelectedCustomer(c); setEditingCustomer({...c}); setTuningGroupSearch(c.tuningGroup || ''); setView('customerDetail'); }} className="flex justify-between items-center p-4 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100">
-                      <div className="font-medium">{c.name}</div>
-                      <div className="text-gray-400">Set schedule →</div>
                     </div>
                   ))}
                 </div>
@@ -2098,155 +1879,6 @@ const CommandCentre = () => {
         </div>
       </div>
     );
-  };
-
-  // Get unique tuning groups from all customers
-  const existingTuningGroups = [...new Set(customers.map(c => c.tuningGroup).filter(g => g && g.trim()))].sort();
-  
-  const setTuningGroup = async (groupName) => {
-    if (!editingCustomer) return;
-    const updated = { ...editingCustomer, tuningGroup: groupName };
-    setEditingCustomer(updated);
-    setTuningGroupSearch(groupName);
-    setShowGroupDropdown(false);
-    await updateCustomer(updated);
-  };
-
-  const toggleTuningMonth = async (monthIdx) => {
-    if (!editingCustomer) return;
-    const months = editingCustomer.tuningMonths || [];
-    const newMonths = months.includes(monthIdx) 
-      ? months.filter(m => m !== monthIdx) 
-      : [...months, monthIdx].sort((a, b) => a - b);
-    const updated = { ...editingCustomer, tuningMonths: newMonths };
-    setEditingCustomer(updated);
-    await updateCustomer(updated);
-  };
-
-  // Customer management
-  const addCustomer = async () => {
-    if (!newCustomerName) return;
-    setSaving(true);
-    try {
-      const result = await apiCall('addCustomer', { 
-        data: JSON.stringify({
-          name: newCustomerName,
-          notes: newCustomerAddress,
-          customRate: newCustomerRate ? parseFloat(newCustomerRate) : null,
-          tuningMonths: []
-        })
-      });
-      const newCust = { 
-        id: result.id, 
-        name: newCustomerName, 
-        notes: newCustomerAddress,
-        customRate: newCustomerRate ? parseFloat(newCustomerRate) : null,
-        tuningMonths: []
-      };
-      setCustomers([...customers, newCust]);
-      setShowAddCustomer(false);
-      setNewCustomerName('');
-      setNewCustomerAddress('');
-      setNewCustomerRate('');
-      // Open the new customer detail
-      setSelectedCustomer(newCust);
-      setEditingCustomer({...newCust});
-      setTuningGroupSearch('');
-      setView('customerDetail');
-    } catch (err) {
-      alert('Failed to add customer: ' + err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  // Contact management
-  const addContact = async () => {
-    if (!editingCustomer || !newContactName) return;
-    setSaving(true);
-    try {
-      const result = await apiCall('addContact', { 
-        data: JSON.stringify({
-          customerId: editingCustomer.id,
-          name: newContactName,
-          role: newContactRole,
-          phone: newContactPhone,
-          email: newContactEmail,
-          isBookingContact: newContactIsBooking
-        })
-      });
-      setContacts([...contacts, { 
-        id: result.id, 
-        customerId: editingCustomer.id, 
-        name: newContactName, 
-        role: newContactRole, 
-        phone: newContactPhone, 
-        email: newContactEmail,
-        isBookingContact: newContactIsBooking
-      }]);
-      setShowAddContact(false);
-      setNewContactName('');
-      setNewContactRole('');
-      setNewContactPhone('');
-      setNewContactEmail('');
-      setNewContactIsBooking(false);
-    } catch (err) {
-      alert('Failed to add contact: ' + err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const saveContact = async (contact) => {
-    setSaving(true);
-    try {
-      await apiCall('updateContact', { data: JSON.stringify(contact) });
-      setContacts(contacts.map(c => c.id === contact.id ? contact : c));
-      setEditingContact(null);
-    } catch (err) {
-      alert('Failed to save contact: ' + err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const deleteContact = async (contactId) => {
-    if (!confirm('Delete this contact?')) return;
-    setSaving(true);
-    try {
-      await apiCall('deleteContact', { id: contactId });
-      setContacts(contacts.filter(c => c.id !== contactId));
-    } catch (err) {
-      alert('Failed to delete contact: ' + err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const deleteCustomer = async (customerId) => {
-    const customer = customers.find(c => c.id === customerId);
-    const customerContacts = contacts.filter(c => c.customerId === customerId);
-    const contactCount = customerContacts.length;
-    
-    const message = contactCount > 0 
-      ? `Delete "${customer?.name}" and ${contactCount} associated contact${contactCount > 1 ? 's' : ''}?\n\nThis cannot be undone.`
-      : `Delete "${customer?.name}"?\n\nThis cannot be undone.`;
-    
-    if (!confirm(message)) return;
-    
-    setSaving(true);
-    try {
-      await apiCall('deleteCustomer', { customerId });
-      setCustomers(customers.filter(c => c.id !== customerId));
-      setContacts(contacts.filter(c => c.customerId !== customerId));
-      setView('customers');
-      setEditingCustomer(null);
-      setSelectedCustomer(null);
-    } catch (err) {
-      alert('Failed to delete customer: ' + err.message);
-    } finally {
-      setSaving(false);
-    }
   };
 
   // ============================================================
@@ -2262,13 +1894,7 @@ const CommandCentre = () => {
           
           {view === 'planner' && (
             <div className="relative">
-              <input 
-                type="text" 
-                placeholder="🔍 Search customer..." 
-                value={plannerSearch} 
-                onChange={(e) => setPlannerSearch(e.target.value)} 
-                className="w-64 px-4 py-2 border-2 rounded-lg" 
-              />
+              <input type="text" placeholder="🔍 Search customer..." value={plannerSearch} onChange={(e) => setPlannerSearch(e.target.value)} className="w-64 px-4 py-2 border-2 rounded-lg" />
               {plannerSearch.length > 0 && (
                 <div className="absolute top-full left-0 right-0 bg-white border-2 rounded-b-lg shadow-lg max-h-64 overflow-y-auto z-50">
                   {customers.filter(c => c.name.toLowerCase().includes(plannerSearch.toLowerCase())).slice(0, 10).map(c => (
@@ -2302,7 +1928,7 @@ const CommandCentre = () => {
       {/* Main Content */}
       {view === 'planner' && (
         <div className="flex gap-3 flex-1 min-h-0">
-          {/* LEFT PANEL - scrolls as one unit */}
+          {/* LEFT PANEL */}
           <div className="w-80 bg-white rounded-lg shadow-xl p-4 no-print overflow-y-auto scroll-panel" style={{maxHeight: 'calc(100vh - 160px)'}}>
             {selectedCustomerToBook && (
               <div className={`border-2 rounded-lg p-4 mb-3 booking-highlight ${selectedTicketToBook ? 'bg-orange-100 border-orange-500' : selectedGroupToBook ? 'bg-blue-100 border-blue-500' : 'bg-green-100 border-green-500'}`}>
@@ -2333,126 +1959,20 @@ const CommandCentre = () => {
                   <input type="text" value={jobNotes} onChange={(e) => setJobNotes(e.target.value)} className="w-full p-3 border rounded-lg text-sm" placeholder="e.g. Fix cipher, service swell" />
                 </div>
                 
-                {/* Show which month they're due for (from Tunings Due) */}
-                {(() => {
-                  const dueItem = jobsDue.find(j => j.customer.id === selectedCustomerToBook?.id);
-                  if (dueItem && !selectedTicketToBook) {
-                    // Find next available workday in the due month
-                    const getNextWorkday = () => {
-                      const daysInMonth = new Date(dueItem.year, dueItem.month + 1, 0).getDate();
-                      for (let d = 1; d <= daysInMonth; d++) {
-                        const date = new Date(dueItem.year, dueItem.month, d);
-                        const dateStr = getDateString(dueItem.year, dueItem.month, d);
-                        const dow = date.getDay();
-                        // Mon-Fri, not a day off, not already booked
-                        if (dow >= 1 && dow <= 5 && !isDayOff(dateStr) && !bookings.some(b => b.date === dateStr)) {
-                          return { date, dateStr, dayName: ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow] };
-                        }
-                      }
-                      return null;
-                    };
-                    const nextDay = getNextWorkday();
-                    
-                    return (
-                      <div className={`mt-3 p-3 rounded-lg ${dueItem.urgent ? 'bg-amber-100 border-2 border-amber-400' : 'bg-blue-50 border border-blue-200'}`}>
-                        <div className="text-sm font-medium mb-2">
-                          {dueItem.urgent ? '⚠️' : '📅'} Due: <strong>{dueItem.monthName} {dueItem.year}</strong>
-                          {dueItem.urgent && <span className="text-amber-700 ml-2">(overdue!)</span>}
-                        </div>
-                        {nextDay && (
-                          <button
-                            onClick={() => {
-                              const price = customQuote ? parseFloat(customQuote) : 0;
-                              addBooking(nextDay.dateStr, selectedCustomerToBook.id, bookingType, price, jobNotes);
-                            }}
-                            className="w-full py-2 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600"
-                          >
-                            ⚡ Quick Book: {nextDay.dayName} {nextDay.date.getDate()} {dueItem.monthName.slice(0,3)}
-                          </button>
-                        )}
-                      </div>
-                    );
-                  }
-                  return null;
-                })()}
-                
                 <div className={`text-lg mt-4 font-bold text-center p-3 rounded-lg ${selectedTicketToBook ? 'text-orange-700 bg-orange-200' : 'text-green-700 bg-green-200'}`}>👆 Now tap a day on the calendar</div>
                 <button onClick={() => { setSelectedCustomerToBook(null); setSelectedGroupToBook(null); setSelectedTicketToBook(null); setCustomQuote(''); setJobNotes(''); }} className="w-full mt-3 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target">Cancel</button>
               </div>
             )}
             
+            {/* Tickets */}
             {(tickets.length > 0 || showAddTicket) && (() => {
-              const now = new Date();
-              const currentMonth = now.getMonth();
-              const currentYear = now.getFullYear();
-              
-              // Helper to get customer's next tuning month
-              const getNextTuningMonth = (customerId) => {
-                const customer = getCustomerById(customerId);
-                if (!customer || !customer.tuningMonths || customer.tuningMonths.length === 0) return null;
-                
-                // Find next tuning month from current month onwards
-                const sortedMonths = [...customer.tuningMonths].sort((a, b) => a - b);
-                const nextMonth = sortedMonths.find(m => m >= currentMonth);
-                if (nextMonth !== undefined) return { month: nextMonth, year: currentYear };
-                
-                // Wrap to next year
-                return { month: sortedMonths[0], year: currentYear + 1 };
-              };
-              
-              // Check if ticket is due this month
-              const isDueThisMonth = (ticket) => {
-                if (ticket.dueType === 'next-visit') {
-                  const next = getNextTuningMonth(ticket.customerId);
-                  return next && next.month === currentMonth && next.year === currentYear;
-                }
-                if (!ticket.dueDate) return false;
-                const [year, month] = ticket.dueDate.split('-').map(Number);
-                return year === currentYear && month === currentMonth + 1;
-              };
-              
-              // Check if ticket is overdue
-              const isOverdue = (ticket) => {
-                if (ticket.dueType === 'next-visit') {
-                  // Next-visit tickets can't be overdue in the traditional sense
-                  return false;
-                }
-                if (!ticket.dueDate) return false;
-                const dueDate = new Date(ticket.dueDate);
-                return dueDate < new Date(currentYear, currentMonth, 1);
-              };
-              
-              // Check if ticket is upcoming (future)
-              const isUpcoming = (ticket) => {
-                if (ticket.dueType === 'next-visit') {
-                  const next = getNextTuningMonth(ticket.customerId);
-                  return next && (next.year > currentYear || (next.year === currentYear && next.month > currentMonth));
-                }
-                if (!ticket.dueDate) return false;
-                const [year, month] = ticket.dueDate.split('-').map(Number);
-                return year > currentYear || (year === currentYear && month > currentMonth + 1);
-              };
-              
-              // Filter tickets by status and due date
               const activeTickets = tickets.filter(t => t.status === 'new');
-              const dueThisMonth = activeTickets.filter(t => isDueThisMonth(t));
-              const overdue = activeTickets.filter(t => isOverdue(t));
-              const noDueDate = activeTickets.filter(t => !t.dueDate && t.dueType !== 'next-visit');
-              const futureTickets = activeTickets.filter(t => isUpcoming(t));
-              
-              const typeIcons = {
-                fault: '⚠️',
-                quote: '💰',
-                reminder: '🔔',
-                'part-return': '🔧',
-                'follow-up': '📞'
-              };
+              const typeIcons = { fault: '⚠️', quote: '💰', reminder: '🔔', 'part-return': '🔧', 'follow-up': '📞' };
               
               const renderTicket = (ticket) => {
                 const customer = getCustomerById(ticket.customerId);
                 const isSelected = selectedTicketToBook?.id === ticket.id;
                 const icon = typeIcons[ticket.type] || '📋';
-                const nextVisit = ticket.dueType === 'next-visit' ? getNextTuningMonth(ticket.customerId) : null;
                 return (
                   <div key={ticket.id} onClick={() => selectTicketToBook(ticket)} className={`p-3 rounded-lg cursor-pointer mb-2 border-2 ${isSelected ? 'bg-orange-100 border-orange-500' : 'bg-red-50 border-red-300 hover:border-orange-400'}`}>
                     <div className="flex justify-between items-start">
@@ -2463,41 +1983,17 @@ const CommandCentre = () => {
                       </div>
                     </div>
                     <div className="text-sm text-gray-700">{ticket.description}</div>
-                    {ticket.dueType === 'next-visit' && nextVisit && (
-                      <div className="text-xs text-blue-600 mt-1">📅 Next visit ({monthNames[nextVisit.month]} {nextVisit.year})</div>
-                    )}
-                    {ticket.dueDate && ticket.dueType !== 'next-visit' && <div className="text-xs text-gray-500 mt-1">Due: {formatDate(ticket.dueDate)}</div>}
+                    {ticket.dueDate && <div className="text-xs text-gray-500 mt-1">Due: {formatDate(ticket.dueDate)}</div>}
                   </div>
                 );
               };
               
               return (
                 <div className="mb-4">
-                  {(overdue.length > 0) && (
+                  {activeTickets.length > 0 && (
                     <>
-                      <h2 className="text-lg font-bold mb-2 text-red-600">⚠️ Overdue ({overdue.length})</h2>
-                      {overdue.map(renderTicket)}
-                    </>
-                  )}
-                  
-                  {(dueThisMonth.length > 0) && (
-                    <>
-                      <h2 className="text-lg font-bold mb-2 text-orange-600">📅 Due This Month ({dueThisMonth.length})</h2>
-                      {dueThisMonth.map(renderTicket)}
-                    </>
-                  )}
-                  
-                  {(noDueDate.length > 0) && (
-                    <>
-                      <h2 className="text-lg font-bold mb-2">📥 Inbox ({noDueDate.length})</h2>
-                      {noDueDate.map(renderTicket)}
-                    </>
-                  )}
-                  
-                  {(futureTickets.length > 0) && (
-                    <>
-                      <h2 className="text-lg font-bold mb-2 text-gray-500">🗓️ Upcoming ({futureTickets.length})</h2>
-                      {futureTickets.map(renderTicket)}
+                      <h2 className="text-lg font-bold mb-2">📥 Inbox ({activeTickets.length})</h2>
+                      {activeTickets.map(renderTicket)}
                     </>
                   )}
                 </div>
@@ -2507,13 +2003,7 @@ const CommandCentre = () => {
             {showAddTicket && (
               <div className="mb-4 bg-yellow-50 p-3 rounded-lg">
                 <div className="font-bold mb-2">New Request</div>
-                <input 
-                  type="text" 
-                  placeholder="Search customer..." 
-                  value={customerSearch} 
-                  onChange={(e) => setCustomerSearch(e.target.value)} 
-                  className="w-full p-2 border rounded mb-2 text-sm" 
-                />
+                <input type="text" placeholder="Search customer..." value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} className="w-full p-2 border rounded mb-2 text-sm" />
                 {customerSearch && filteredCustomersForSearch.length > 0 && (
                   <div className="max-h-32 overflow-y-auto mb-2 bg-white border rounded">
                     {filteredCustomersForSearch.map(c => (
@@ -2521,49 +2011,14 @@ const CommandCentre = () => {
                     ))}
                   </div>
                 )}
-                <select 
-                  value={newTicketType} 
-                  onChange={(e) => setNewTicketType(e.target.value)} 
-                  className="w-full p-2 border rounded mb-2 text-sm"
-                >
+                <select value={newTicketType} onChange={(e) => setNewTicketType(e.target.value)} className="w-full p-2 border rounded mb-2 text-sm">
                   <option value="fault">⚠️ Fault</option>
                   <option value="quote">💰 Quote Required</option>
                   <option value="reminder">🔔 Reminder</option>
                   <option value="part-return">🔧 Part to Return</option>
                   <option value="follow-up">📞 Follow Up</option>
                 </select>
-                <input 
-                  type="text" 
-                  placeholder="Description..." 
-                  value={newTicketDescription} 
-                  onChange={(e) => setNewTicketDescription(e.target.value)} 
-                  className="w-full p-2 border rounded mb-2 text-sm" 
-                />
-                <div className="mb-2">
-                  <label className="text-sm text-gray-600 block mb-1">When to surface:</label>
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={() => setNewTicketDueDate('next-visit')} 
-                      className={`flex-1 p-2 rounded text-sm font-medium ${newTicketDueDate === 'next-visit' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
-                    >
-                      📅 Next Visit
-                    </button>
-                    <button 
-                      onClick={() => setNewTicketDueDate('')} 
-                      className={`flex-1 p-2 rounded text-sm font-medium ${newTicketDueDate !== 'next-visit' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
-                    >
-                      🗓️ Specific Month
-                    </button>
-                  </div>
-                </div>
-                {newTicketDueDate !== 'next-visit' && (
-                  <input 
-                    type="month" 
-                    value={newTicketDueDate ? newTicketDueDate.slice(0, 7) : ''} 
-                    onChange={(e) => setNewTicketDueDate(e.target.value ? e.target.value + '-01' : '')} 
-                    className="w-full p-2 border rounded mb-2 text-sm" 
-                  />
-                )}
+                <input type="text" placeholder="Description..." value={newTicketDescription} onChange={(e) => setNewTicketDescription(e.target.value)} className="w-full p-2 border rounded mb-2 text-sm" />
                 <div className="flex gap-2">
                   <button onClick={addTicket} disabled={!newTicketCustomer || !newTicketDescription} className="flex-1 py-2 bg-green-500 text-white rounded font-medium disabled:opacity-50">Save</button>
                   <button onClick={() => { setShowAddTicket(false); setNewTicketCustomer(''); setNewTicketDescription(''); setNewTicketType('fault'); setNewTicketDueDate(''); setCustomerSearch(''); }} className="flex-1 py-2 bg-gray-300 rounded font-medium">Cancel</button>
@@ -2581,95 +2036,20 @@ const CommandCentre = () => {
             <div className="space-y-2 mb-4">
               {jobsDue.length === 0 ? (
                 <div className="text-center py-8"><div className="text-5xl mb-3">🎉</div><p className="text-gray-500 text-lg">All caught up!</p></div>
-              ) : (() => {
-                // Group jobs by tuningGroup AND month (only group if same group AND same due month)
-                const grouped = {};
-                const ungrouped = [];
-                jobsDue.forEach(item => {
-                  const group = item.customer.tuningGroup;
-                  if (group) {
-                    // Key by both group name and month so organs only group when due the same month
-                    const groupKey = `${group}|||${item.month}|||${item.year}`;
-                    if (!grouped[groupKey]) grouped[groupKey] = { name: group, month: item.month, year: item.year, monthName: item.monthName, items: [] };
-                    grouped[groupKey].items.push(item);
-                  } else {
-                    ungrouped.push(item);
-                  }
-                });
-                
-                // Separate into actual groups (2+ items) and singles
-                const actualGroups = [];
-                Object.values(grouped).forEach(g => {
-                  if (g.items.length > 1) {
-                    actualGroups.push(g);
-                  } else {
-                    ungrouped.push(g.items[0]);
-                  }
-                });
-                
-                return (
-                  <>
-                    {/* Grouped tunings (only when 2+ organs due same month) */}
-                    {actualGroups.map((group, gIdx) => (
-                      <div key={gIdx} className={`rounded-lg border-2 overflow-hidden ${group.items.some(i => i.urgent) ? 'border-amber-400 bg-amber-50' : 'border-blue-300 bg-blue-50'}`}>
-                        <div className="p-3 bg-white border-b flex justify-between items-center">
-                          <div>
-                            <span className="font-bold text-lg">🔗 {group.name}</span>
-                            <span className="text-sm text-gray-500 ml-2">({group.items.length} organs • {group.monthName})</span>
-                          </div>
-                          {group.items.some(i => i.urgent) && <span className="text-amber-600 font-bold">⚠️</span>}
-                        </div>
-                        <div className="p-2 space-y-1">
-                          {group.items.map((item, idx) => (
-                            <div 
-                              key={idx}
-                              onClick={() => { setSelectedCustomerToBook(item.customer); setSelectedGroupToBook(null); setBookingType('OTS'); setCustomQuote(''); setJobNotes(''); }}
-                              className={`p-3 rounded cursor-pointer transition-all ${selectedCustomerToBook?.id === item.customer.id ? 'bg-green-200 ring-2 ring-green-500' : 'bg-white hover:bg-gray-100'}`}
-                            >
-                              <div className="flex justify-between">
-                                <span className="font-medium">{item.customer.name}</span>
-                                <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{item.urgent && '⚠️'}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                        <div className="p-2 border-t bg-white">
-                          <button
-                            onClick={() => {
-                              // Select all customers in group for booking
-                              const firstItem = group.items[0];
-                              setSelectedCustomerToBook(firstItem.customer);
-                              setSelectedGroupToBook(group.items);
-                              setBookingType('OTS');
-                              setCustomQuote('');
-                              setJobNotes('');
-                            }}
-                            className="w-full py-2 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600"
-                          >
-                            📅 Book All {group.items.length} Together
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                    
-                    {/* Ungrouped tunings (including organs in groups but due alone this month) */}
-                    {ungrouped.map((item, idx) => (
-                      <div key={`ungrouped-${idx}`} onClick={() => { setSelectedCustomerToBook(item.customer); setSelectedGroupToBook(null); setBookingType('OTS'); setCustomQuote(''); setJobNotes(''); }}
-                        className={`p-4 rounded-lg cursor-pointer transition-all touch-target ${item.urgent ? 'bg-amber-50 border-2 border-amber-400' : 'bg-gray-50 border-2 border-gray-200'} ${selectedCustomerToBook?.id === item.customer.id ? 'ring-4 ring-green-500' : 'hover:border-blue-400'}`}>
-                        <div className="font-bold text-lg">{item.customer.name}</div>
-                        <div className="flex justify-between items-center mt-1">
-                          <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{item.monthName} {item.urgent && '⚠️'}</span>
-                          {item.customer.tuningGroup && <span className="text-xs text-blue-500">🔗 {item.customer.tuningGroup}</span>}
-                        </div>
-                      </div>
-                    ))}
-                  </>
-                );
-              })()}
+              ) : jobsDue.map((item, idx) => (
+                <div key={idx} onClick={() => { setSelectedCustomerToBook(item.customer); setSelectedGroupToBook(null); setBookingType('OTS'); setCustomQuote(''); setJobNotes(''); }}
+                  className={`p-4 rounded-lg cursor-pointer transition-all touch-target ${item.urgent ? 'bg-amber-50 border-2 border-amber-400' : 'bg-gray-50 border-2 border-gray-200'} ${selectedCustomerToBook?.id === item.customer.id ? 'ring-4 ring-green-500' : 'hover:border-blue-400'}`}>
+                  <div className="font-bold text-lg">{item.customer.name}</div>
+                  <div className="flex justify-between items-center mt-1">
+                    <span className={`text-sm ${item.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{item.monthName} {item.urgent && '⚠️'}</span>
+                  </div>
+                </div>
+              ))}
             </div>
             
             <div className="border-b-2 mb-4"></div>
 
+            {/* Big Jobs */}
             <div className="mb-4">
               <h2 className="text-lg font-bold mb-2">🔧 Big Jobs</h2>
               
@@ -2693,21 +2073,8 @@ const CommandCentre = () => {
                   )}
                   <input type="text" placeholder="Project name..." value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} className="w-full p-2 border rounded mb-2" />
                   <input type="number" placeholder="Est. days" value={newProjectEstDays} onChange={(e) => setNewProjectEstDays(e.target.value)} className="w-full p-2 border rounded mb-2" />
-                  <div className="flex gap-2 mb-2 items-center">
-                    <select value={newProjectYearStart} onChange={(e) => { setNewProjectYearStart(parseInt(e.target.value)); if (parseInt(e.target.value) > newProjectYearEnd) setNewProjectYearEnd(parseInt(e.target.value)); }} className="flex-1 p-2 border rounded bg-white">
-                      {[currentYear, currentYear + 1, currentYear + 2, currentYear + 3].map(y => (
-                        <option key={y} value={y}>{y}</option>
-                      ))}
-                    </select>
-                    <span className="text-gray-500">→</span>
-                    <select value={newProjectYearEnd} onChange={(e) => setNewProjectYearEnd(parseInt(e.target.value))} className="flex-1 p-2 border rounded bg-white">
-                      {[currentYear, currentYear + 1, currentYear + 2, currentYear + 3].filter(y => y >= newProjectYearStart).map(y => (
-                        <option key={y} value={y}>{y}</option>
-                      ))}
-                    </select>
-                  </div>
                   <div className="flex gap-2">
-                    <button onClick={() => { setShowNewProject(false); setNewProjectName(''); setNewProjectCustomer(null); setProjectCustomerSearch(''); setNewProjectEstDays(''); setNewProjectYearStart(currentYear); setNewProjectYearEnd(currentYear); }} className="flex-1 py-2 bg-gray-200 rounded">Cancel</button>
+                    <button onClick={() => { setShowNewProject(false); setNewProjectName(''); setNewProjectCustomer(null); setProjectCustomerSearch(''); setNewProjectEstDays(''); }} className="flex-1 py-2 bg-gray-200 rounded">Cancel</button>
                     <button onClick={createProject} disabled={!newProjectName || !newProjectCustomer} className="flex-1 py-2 bg-purple-500 text-white rounded disabled:opacity-50">Create</button>
                   </div>
                 </div>
@@ -2726,23 +2093,13 @@ const CommandCentre = () => {
               
               {!showNewProject && !allocatingProject && activeProjects.length > 0 && (
                 <div className="space-y-2 mb-2">
-                  {activeProjects.map(project => {
-                    const yearStart = project.yearStart || project.targetYear;
-                    const yearEnd = project.yearEnd || project.targetYear;
-                    const yearLabel = yearStart === yearEnd ? yearStart : `${yearStart}-${yearEnd}`;
-                    return (
-                      <div key={project.id} onClick={() => setShowProjectSummary(project)} className="bg-purple-50 border-2 border-purple-200 rounded-lg p-3 cursor-pointer hover:border-purple-400">
-                        <div className="flex justify-between items-start">
-                          <div className="text-sm text-gray-600">{project.customerName}</div>
-                          {yearLabel && <span className="text-xs bg-purple-200 text-purple-700 px-2 py-0.5 rounded">{yearLabel}</span>}
-                        </div>
-                        <div className="font-medium">{project.name}</div>
-                        <div className="flex justify-between items-center mt-1">
-                          <span className="text-sm text-purple-600">{project.estimatedDays ? `${project.days.length}/${project.estimatedDays} days` : `${project.days.length} days`}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {activeProjects.map(project => (
+                    <div key={project.id} onClick={() => setShowProjectSummary(project)} className="bg-purple-50 border-2 border-purple-200 rounded-lg p-3 cursor-pointer hover:border-purple-400">
+                      <div className="text-sm text-gray-600">{project.customerName}</div>
+                      <div className="font-medium">{project.name}</div>
+                      <div className="text-sm text-purple-600">{project.estimatedDays ? `${project.days.length}/${project.estimatedDays} days` : `${project.days.length} days`}</div>
+                    </div>
+                  ))}
                 </div>
               )}
               
@@ -2764,17 +2121,8 @@ const CommandCentre = () => {
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-2xl font-bold">Customers ({customers.length})</h2>
             <div className="flex gap-2">
-              <button 
-                onClick={() => setShowAddCustomer(true)}
-                className="px-4 py-2 rounded-lg font-medium bg-blue-500 hover:bg-blue-600 text-white"
-              >
-                + New Customer
-              </button>
-              <button 
-                onClick={syncContactsToGoogle} 
-                disabled={syncing}
-                className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 ${syncing ? 'bg-gray-300 cursor-wait' : 'bg-green-500 hover:bg-green-600 text-white'}`}
-              >
+              <button onClick={() => setShowAddCustomer(true)} className="px-4 py-2 rounded-lg font-medium bg-blue-500 hover:bg-blue-600 text-white">+ New Customer</button>
+              <button onClick={syncContactsToGoogle} disabled={syncing} className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 ${syncing ? 'bg-gray-300 cursor-wait' : 'bg-green-500 hover:bg-green-600 text-white'}`}>
                 {syncing ? '⏳ Syncing...' : '📱 Sync to Google'}
               </button>
             </div>
@@ -2795,25 +2143,12 @@ const CommandCentre = () => {
             </div>
           )}
           
-          {syncMessage && (
-            <div className={`mb-4 p-3 rounded-lg ${syncMessage.startsWith('Error') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-              {syncMessage}
-            </div>
-          )}
+          {syncMessage && <div className={`mb-4 p-3 rounded-lg ${syncMessage.startsWith('Error') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{syncMessage}</div>}
           <div className="mb-4">
-            <input 
-              type="text" 
-              placeholder="🔍 Search customers..." 
-              value={customerListSearch} 
-              onChange={(e) => setCustomerListSearch(e.target.value)}
-              className="w-full p-3 border-2 rounded-lg text-lg"
-            />
+            <input type="text" placeholder="🔍 Search customers..." value={customerListSearch} onChange={(e) => setCustomerListSearch(e.target.value)} className="w-full p-3 border-2 rounded-lg text-lg" />
           </div>
           <div className="grid gap-2 max-h-[calc(100vh-280px)] overflow-y-auto scroll-panel">
-            {customers
-              .filter(c => !customerListSearch || c.name.toLowerCase().includes(customerListSearch.toLowerCase()))
-              .sort((a, b) => a.name.localeCompare(b.name))
-              .map(c => (
+            {customers.filter(c => !customerListSearch || c.name.toLowerCase().includes(customerListSearch.toLowerCase())).sort((a, b) => a.name.localeCompare(b.name)).map(c => (
               <div key={c.id} onClick={() => { setSelectedCustomer(c); setEditingCustomer({...c}); setTuningGroupSearch(c.tuningGroup || ''); setView('customerDetail'); }} className="border-2 rounded-lg p-4 hover:bg-gray-50 cursor-pointer flex justify-between items-center touch-target">
                 <div>
                   <div className="font-bold text-xl">{c.name}</div>
@@ -2830,6 +2165,7 @@ const CommandCentre = () => {
           </div>
         </div>
       )}
+      
       {view === 'customerDetail' && editingCustomer && (() => {
         const customerContacts = contacts.filter(c => c.customerId === editingCustomer.id);
         const history = getCustomerHistory(editingCustomer.id);
@@ -2841,7 +2177,7 @@ const CommandCentre = () => {
               <button onClick={() => { setView('customers'); setEditingContact(null); setShowAddContact(false); }} className="bg-gray-300 px-6 py-3 rounded-lg text-xl touch-target">← Back</button>
             </div>
             
-            {/* Contacts Section */}
+            {/* Contacts */}
             <div className="mb-6">
               <div className="flex justify-between items-center mb-3">
                 <h3 className="font-bold text-xl">👥 Contacts ({customerContacts.length})</h3>
@@ -2853,7 +2189,7 @@ const CommandCentre = () => {
                   <h4 className="font-bold mb-3">New Contact</h4>
                   <div className="grid grid-cols-2 gap-3">
                     <input type="text" placeholder="Name *" value={newContactName} onChange={(e) => setNewContactName(e.target.value)} className="p-3 border-2 rounded-lg" />
-                    <input type="text" placeholder="Role (e.g. Organist, Treasurer)" value={newContactRole} onChange={(e) => setNewContactRole(e.target.value)} className="p-3 border-2 rounded-lg" />
+                    <input type="text" placeholder="Role" value={newContactRole} onChange={(e) => setNewContactRole(e.target.value)} className="p-3 border-2 rounded-lg" />
                     <input type="tel" placeholder="Phone" value={newContactPhone} onChange={(e) => setNewContactPhone(e.target.value)} className="p-3 border-2 rounded-lg" />
                     <input type="email" placeholder="Email" value={newContactEmail} onChange={(e) => setNewContactEmail(e.target.value)} className="p-3 border-2 rounded-lg" />
                   </div>
@@ -2885,7 +2221,6 @@ const CommandCentre = () => {
                           <label className="flex items-center gap-2 cursor-pointer">
                             <input type="checkbox" checked={editingContact.isBookingContact || false} onChange={(e) => setEditingContact({...editingContact, isBookingContact: e.target.checked})} className="w-5 h-5" />
                             <span className="font-medium">⭐ Booking Contact</span>
-                            <span className="text-sm text-gray-500">(shown when confirming bookings)</span>
                           </label>
                           <div className="flex gap-2">
                             <button onClick={() => saveContact(editingContact)} className="bg-green-500 text-white px-4 py-2 rounded">Save</button>
@@ -2896,10 +2231,7 @@ const CommandCentre = () => {
                       ) : (
                         <div className="flex justify-between items-start">
                           <div>
-                            <div className="font-bold text-lg">
-                              {contact.isBookingContact && <span className="text-yellow-500 mr-1">⭐</span>}
-                              {contact.name}
-                            </div>
+                            <div className="font-bold text-lg">{contact.isBookingContact && <span className="text-yellow-500 mr-1">⭐</span>}{contact.name}</div>
                             {contact.role && <div className="text-blue-600">{contact.role}</div>}
                             <div className="flex gap-4 mt-2">
                               {contact.phone && <a href={`tel:${contact.phone}`} className="text-lg font-bold text-green-600">📞 {contact.phone}</a>}
@@ -2915,74 +2247,7 @@ const CommandCentre = () => {
               )}
             </div>
 
-            {/* Tuning Group Section */}
-            <div className="border-t-2 pt-4 mb-6">
-              <h3 className="font-bold text-xl mb-3">🔗 Tuning Group</h3>
-              <p className="text-sm text-gray-500 mb-2">Group organs that are tuned together (e.g. same benefice or area)</p>
-              <div className="relative">
-                <input
-                  type="text"
-                  placeholder="Type to search or create group..."
-                  value={tuningGroupSearch}
-                  onChange={(e) => { setTuningGroupSearch(e.target.value); setShowGroupDropdown(true); }}
-                  onFocus={() => setShowGroupDropdown(true)}
-                  onBlur={() => setTimeout(() => setShowGroupDropdown(false), 200)}
-                  className="w-full p-3 border-2 rounded-lg text-lg"
-                />
-                {editingCustomer.tuningGroup && (
-                  <button 
-                    onClick={() => setTuningGroup('')}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 text-xl"
-                  >✕</button>
-                )}
-                {showGroupDropdown && (
-                  <div className="absolute top-full left-0 right-0 bg-white border-2 rounded-b-lg shadow-lg max-h-48 overflow-y-auto z-50">
-                    {tuningGroupSearch && !existingTuningGroups.includes(tuningGroupSearch) && (
-                      <div 
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => setTuningGroup(tuningGroupSearch)}
-                        className="p-3 hover:bg-green-50 cursor-pointer border-b bg-green-50"
-                      >
-                        <span className="text-green-600 font-medium">+ Create "{tuningGroupSearch}"</span>
-                      </div>
-                    )}
-                    {existingTuningGroups
-                      .filter(g => !tuningGroupSearch || g.toLowerCase().includes(tuningGroupSearch.toLowerCase()))
-                      .map(group => (
-                        <div 
-                          key={group}
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => setTuningGroup(group)}
-                          className={`p-3 hover:bg-blue-50 cursor-pointer border-b ${editingCustomer.tuningGroup === group ? 'bg-blue-100' : ''}`}
-                        >
-                          {group}
-                          <span className="text-gray-400 text-sm ml-2">
-                            ({customers.filter(c => c.tuningGroup === group).length} organs)
-                          </span>
-                        </div>
-                      ))}
-                    {existingTuningGroups.length === 0 && !tuningGroupSearch && (
-                      <div className="p-3 text-gray-400 italic">No groups yet - type to create one</div>
-                    )}
-                  </div>
-                )}
-              </div>
-              {editingCustomer.tuningGroup && (
-                <div className="mt-3 p-3 bg-blue-50 rounded-lg">
-                  <div className="text-sm text-blue-700 font-medium mb-2">Other organs in "{editingCustomer.tuningGroup}":</div>
-                  <div className="flex flex-wrap gap-2">
-                    {customers.filter(c => c.tuningGroup === editingCustomer.tuningGroup && c.id !== editingCustomer.id).map(c => (
-                      <span key={c.id} className="bg-white px-3 py-1 rounded-full text-sm border">{c.name}</span>
-                    ))}
-                    {customers.filter(c => c.tuningGroup === editingCustomer.tuningGroup && c.id !== editingCustomer.id).length === 0 && (
-                      <span className="text-gray-400 italic">No other organs in this group yet</span>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Tuning Schedule Section */}
+            {/* Tuning Schedule */}
             <div className="border-t-2 pt-4 mb-6">
               <h3 className="font-bold text-xl mb-3">📅 Tuning Schedule</h3>
               <div className="grid grid-cols-6 gap-2">
@@ -2991,81 +2256,15 @@ const CommandCentre = () => {
                 ))}
               </div>
             </div>
-
-            {/* Customer Tickets Section */}
-            {(() => {
-              const customerTickets = tickets.filter(t => t.customerId === editingCustomer.id && t.status === 'new');
-              const typeIcons = { fault: '⚠️', quote: '💰', reminder: '🔔', 'part-return': '🔧', 'follow-up': '📞' };
-              if (customerTickets.length === 0) return null;
-              
-              // Get next tuning month for this customer
-              const getNextTuningMonth = () => {
-                const now = new Date();
-                const currentMonth = now.getMonth();
-                const currentYear = now.getFullYear();
-                if (!editingCustomer.tuningMonths || editingCustomer.tuningMonths.length === 0) return null;
-                const sortedMonths = [...editingCustomer.tuningMonths].sort((a, b) => a - b);
-                const nextMonth = sortedMonths.find(m => m >= currentMonth);
-                if (nextMonth !== undefined) return { month: nextMonth, year: currentYear };
-                return { month: sortedMonths[0], year: currentYear + 1 };
-              };
-              const nextVisit = getNextTuningMonth();
-              
-              return (
-                <div className="border-t-2 pt-4">
-                  <h3 className="font-bold text-xl mb-3">🎫 Open Tickets ({customerTickets.length})</h3>
-                  <div className="space-y-2">
-                    {customerTickets.map(ticket => (
-                      <div key={ticket.id} className="p-3 rounded-lg bg-yellow-50 border-l-4 border-yellow-500">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <div className="font-bold">{typeIcons[ticket.type] || '📋'} {ticket.description}</div>
-                            {ticket.dueType === 'next-visit' && nextVisit && (
-                              <div className="text-sm text-blue-600">📅 Next visit ({monthNames[nextVisit.month]} {nextVisit.year})</div>
-                            )}
-                            {ticket.dueDate && ticket.dueType !== 'next-visit' && <div className="text-sm text-gray-500">Due: {formatDate(ticket.dueDate)}</div>}
-                          </div>
-                          <div className="flex gap-2">
-                            <button onClick={() => openEditTicket(ticket)} className="text-gray-400 hover:text-blue-500">✏️</button>
-                            <button onClick={() => deleteTicket(ticket.id)} className="text-gray-400 hover:text-red-500">✕</button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Job History Section */}
-            <div className="border-t-2 pt-4">
-              <h3 className="font-bold text-xl mb-3">📋 Job History ({history.length})</h3>
-              <div className="space-y-2 max-h-60 overflow-y-auto">
-                {history.length === 0 ? (
-                  <p className="text-gray-400 italic">No jobs yet</p>
-                ) : history.map(booking => (
-                  <div key={booking.id} className="p-4 rounded-lg bg-gray-50 border-l-4 border-blue-500">
-                    <div className="flex justify-between">
-                      <div className="font-bold">{formatDate(booking.date)}</div>
-                      <div className="font-bold">£{booking.price}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
             
             {/* Delete Customer */}
             <div className="border-t-2 pt-4 mt-6">
-              <button 
-                onClick={() => deleteCustomer(editingCustomer.id)}
-                className="bg-red-100 text-red-600 px-4 py-2 rounded-lg hover:bg-red-200 text-sm"
-              >
-                🗑️ Delete Customer
-              </button>
+              <button onClick={() => deleteCustomer(editingCustomer.id)} className="bg-red-100 text-red-600 px-4 py-2 rounded-lg hover:bg-red-200 text-sm">🗑️ Delete Customer</button>
             </div>
           </div>
         );
       })()}
+      
       {view === 'reports' && <ReportsView />}
       
       {showProjectSummary && <ProjectSummaryModal project={showProjectSummary} onClose={() => setShowProjectSummary(null)} />}
@@ -3075,19 +2274,6 @@ const CommandCentre = () => {
       {editingTicket && (() => {
         const customer = getCustomerById(editingTicket.customerId);
         const typeIcons = { fault: '⚠️', quote: '💰', reminder: '🔔', 'part-return': '🔧', 'follow-up': '📞' };
-        
-        // Get next tuning month for this customer
-        const getNextTuningMonthForCustomer = () => {
-          const now = new Date();
-          const currentMonth = now.getMonth();
-          const currentYear = now.getFullYear();
-          if (!customer?.tuningMonths || customer.tuningMonths.length === 0) return null;
-          const sortedMonths = [...customer.tuningMonths].sort((a, b) => a - b);
-          const nextMonth = sortedMonths.find(m => m >= currentMonth);
-          if (nextMonth !== undefined) return { month: nextMonth, year: currentYear };
-          return { month: sortedMonths[0], year: currentYear + 1 };
-        };
-        const nextVisit = getNextTuningMonthForCustomer();
         
         return (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={() => setEditingTicket(null)}>
@@ -3103,11 +2289,7 @@ const CommandCentre = () => {
               
               <div className="mb-4">
                 <label className="block text-sm text-gray-600 mb-1">Type</label>
-                <select 
-                  value={editingTicket.type || 'fault'} 
-                  onChange={(e) => setEditingTicket({...editingTicket, type: e.target.value})}
-                  className="w-full p-3 border-2 rounded-lg"
-                >
+                <select value={editingTicket.type || 'fault'} onChange={(e) => setEditingTicket({...editingTicket, type: e.target.value})} className="w-full p-3 border-2 rounded-lg">
                   <option value="fault">⚠️ Fault</option>
                   <option value="quote">💰 Quote Required</option>
                   <option value="reminder">🔔 Reminder</option>
@@ -3118,48 +2300,7 @@ const CommandCentre = () => {
               
               <div className="mb-4">
                 <label className="block text-sm text-gray-600 mb-1">Description</label>
-                <textarea 
-                  value={editingTicket.description || ''} 
-                  onChange={(e) => setEditingTicket({...editingTicket, description: e.target.value})}
-                  className="w-full p-3 border-2 rounded-lg min-h-[100px]"
-                  placeholder="What needs to be done?"
-                />
-              </div>
-              
-              <div className="mb-4">
-                <label className="block text-sm text-gray-600 mb-1">When to surface</label>
-                <div className="flex gap-2 mb-2">
-                  <button 
-                    onClick={() => setEditingTicket({...editingTicket, dueType: 'next-visit', dueDate: ''})} 
-                    className={`flex-1 p-2 rounded font-medium ${editingTicket.dueType === 'next-visit' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
-                  >
-                    📅 Next Visit
-                  </button>
-                  <button 
-                    onClick={() => setEditingTicket({...editingTicket, dueType: 'month'})} 
-                    className={`flex-1 p-2 rounded font-medium ${editingTicket.dueType !== 'next-visit' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
-                  >
-                    🗓️ Specific Month
-                  </button>
-                </div>
-                {editingTicket.dueType === 'next-visit' && nextVisit && (
-                  <div className="text-sm text-blue-600 p-2 bg-blue-50 rounded">📅 Will surface: {monthNames[nextVisit.month]} {nextVisit.year}</div>
-                )}
-                {editingTicket.dueType === 'next-visit' && !nextVisit && (
-                  <div className="text-sm text-orange-600 p-2 bg-orange-50 rounded">⚠️ Customer has no tuning months set</div>
-                )}
-                {editingTicket.dueType !== 'next-visit' && (
-                  <input 
-                    type="month" 
-                    value={editingTicket.dueDate ? editingTicket.dueDate.slice(0, 7) : ''} 
-                    onChange={(e) => setEditingTicket({...editingTicket, dueDate: e.target.value ? e.target.value + '-01' : ''})}
-                    className="w-full p-3 border-2 rounded-lg"
-                  />
-                )}
-              </div>
-              
-              <div className="text-xs text-gray-400 mb-4">
-                Created: {editingTicket.createdAt ? new Date(editingTicket.createdAt).toLocaleDateString('en-GB') : 'Unknown'}
+                <textarea value={editingTicket.description || ''} onChange={(e) => setEditingTicket({...editingTicket, description: e.target.value})} className="w-full p-3 border-2 rounded-lg min-h-[100px]" placeholder="What needs to be done?" />
               </div>
               
               <div className="flex gap-2">
@@ -3170,6 +2311,8 @@ const CommandCentre = () => {
           </div>
         );
       })()}
+      
+      <SavingIndicator />
     </div>
   );
 };
