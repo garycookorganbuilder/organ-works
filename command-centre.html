@@ -99,7 +99,7 @@ const generateTempId = () => `temp_${Date.now()}_${Math.random().toString(36).su
 const CommandCentre = () => {
   const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const DEFAULT_PRICES = { tuning_full: 550, tuning_half: 300, fault: 300, big: 550 };
+  const DEFAULT_PRICES = { tuning_full: 250, tuning_half: 190, fault: 250, big: 250 };
 
   // State
   const [isConfigured, setIsConfigured] = useState(!!getApiUrl());
@@ -2332,7 +2332,7 @@ const CommandCentre = () => {
               <div className="grid gap-3">
                 <input type="text" placeholder="Customer / Church Name *" value={newCustomerName} onChange={(e) => setNewCustomerName(e.target.value)} className="p-3 border-2 rounded-lg text-lg" />
                 <input type="text" placeholder="Notes / Address" value={newCustomerAddress} onChange={(e) => setNewCustomerAddress(e.target.value)} className="p-3 border-2 rounded-lg" />
-                <input type="number" placeholder="Custom Rate (leave blank for default £550)" value={newCustomerRate} onChange={(e) => setNewCustomerRate(e.target.value)} className="p-3 border-2 rounded-lg" />
+                <input type="number" placeholder="Custom Rate (leave blank for standard rates)" value={newCustomerRate} onChange={(e) => setNewCustomerRate(e.target.value)} className="p-3 border-2 rounded-lg" />
               </div>
               <div className="flex gap-2 mt-3">
                 <button onClick={addCustomer} disabled={!newCustomerName} className="bg-green-500 text-white px-6 py-2 rounded-lg disabled:bg-gray-300 font-medium">Save & Edit</button>
@@ -2355,7 +2355,7 @@ const CommandCentre = () => {
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="text-green-600 font-bold text-xl">£{c.customRate || DEFAULT_PRICES.tuning_full}</div>
+                  <div className="text-green-600 font-bold text-xl">{c.customRate ? formatCurrency(c.customRate) : 'Standard'}</div>
                   <div className="text-gray-400 text-2xl mt-2">→</div>
                 </div>
               </div>
