@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Site Tracker · 13 Oct 2026 · changes kept on the phone until the sheet confirms them; access key -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -448,6 +449,23 @@
       cursor: pointer;
     }
     
+    .pending-banner {
+      background: #f59e0b;
+      color: #1a1a1a;
+      font-weight: bold;
+      font-size: 15px;
+      line-height: 1.35;
+      padding: 14px 16px;
+      border-radius: 12px;
+      margin: 0 56px 16px 0;
+      cursor: pointer;
+    }
+    
+    .pending-banner.offline {
+      background: #475569;
+      color: #fff;
+    }
+    
     .refresh-btn {
       position: fixed;
       top: 16px;
@@ -557,6 +575,7 @@
 </head>
 <body>
   <button class="refresh-btn" onclick="loadTodaysBookings()">🔄</button>
+  <div class="pending-banner" id="pendingBanner" style="display: none;" onclick="loadTodaysBookings()"></div>
   
   <div class="header">
     <h1>📍 On Site</h1>
@@ -610,8 +629,9 @@
   </div>
   
   <div class="config-panel" id="configPanel" style="display: none;">
-    <h3>Setup</h3>
+    <h3 id="configTitle">Setup</h3>
     <input type="text" id="apiUrl" placeholder="Google Apps Script URL">
+    <input type="text" id="apiKey" placeholder="Access key (only if you have set one)" autocapitalize="off" autocomplete="off" spellcheck="false">
     <button onclick="saveConfig()">Connect</button>
   </div>
 
@@ -619,6 +639,13 @@
     // Config
     const getApiUrl = () => localStorage.getItem('organWorks_apiUrl') || '';
     const setApiUrl = (url) => localStorage.setItem('organWorks_apiUrl', url);
+    const getApiKey = () => localStorage.getItem('organWorks_apiKey') || '';
+    const setApiKey = (key) => localStorage.setItem('organWorks_apiKey', key);
+    
+    // Things kept on this phone
+    const TIMERS_KEY = 'organWorks_activeTimers';   // clocks that are running
+    const PENDING_KEY = 'organWorks_pendingSaves';  // changes not yet confirmed by the sheet
+    const CACHE_KEY = 'organWorks_cachedDay';       // today's list, for when there is no signal
     
     // State
     let bookings = [];
@@ -627,6 +654,51 @@
     let bookingMaterials = {}; // bookingId -> [{description, cost}]
     let materialsList = []; // quick-pick list from sheet
     let elapsedIntervals = {};
+    let usingCache = false; // true when showing the saved list because the sheet could not be reached
+    let flushing = false;
+    
+    function readStore(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+      } catch (e) {
+        return fallback;
+      }
+    }
+    
+    function writeStore(key, value) {
+      try {
+        localStorage.setItem(key, JSON.stringify(value));
+      } catch (e) {
+        console.error('Could not save on this phone:', e);
+      }
+    }
+    
+    function todayString() {
+      const today = new Date();
+      return today.getFullYear() + '-' + 
+        String(today.getMonth() + 1).padStart(2, '0') + '-' + 
+        String(today.getDate()).padStart(2, '0');
+    }
+    
+    function isValidTime(value) {
+      return !!value && value !== '' && !isNaN(new Date(value).getTime());
+    }
+    
+    const loadPending = () => readStore(PENDING_KEY, []);
+    
+    function savePending(list) {
+      writeStore(PENDING_KEY, list);
+      updateBanner();
+    }
+    
+    function saveTimers() {
+      writeStore(TIMERS_KEY, activeTimers);
+    }
+    
+    function saveCache() {
+      writeStore(CACHE_KEY, { date: todayString(), bookings: bookings, customers: customers, materialsList: materialsList });
+    }
     
     // Init
     document.addEventListener('DOMContentLoaded', () => {
@@ -637,6 +709,9 @@
         month: 'long'
       });
       
+      // Clocks that were running when the page was last open
+      activeTimers = readStore(TIMERS_KEY, {});
+      
       if (!getApiUrl()) {
         document.getElementById('configPanel').style.display = 'block';
         document.getElementById('content').innerHTML = '<div class="no-jobs"><div class="icon">⚙️</div><div>Enter your API URL below to connect</div></div>';
@@ -644,20 +719,27 @@
         loadTodaysBookings();
       }
       
-      // Load any active timers from localStorage
-      const savedTimers = localStorage.getItem('organWorks_activeTimers');
-      if (savedTimers) {
-        activeTimers = JSON.parse(savedTimers);
-      }
+      // Try again whenever signal comes back, the page is reopened, or every 30 seconds
+      window.addEventListener('online', () => flushPending());
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) flushPending(); });
+      setInterval(() => { if (loadPending().length > 0) flushPending(); }, 30000);
     });
     
     function saveConfig() {
-      const url = document.getElementById('apiUrl').value.trim();
+      const url = document.getElementById('apiUrl').value.trim() || getApiUrl();
+      const key = document.getElementById('apiKey').value.trim();
       if (url) {
         setApiUrl(url);
+        if (key) setApiKey(key);
         document.getElementById('configPanel').style.display = 'none';
         loadTodaysBookings();
       }
+    }
+    
+    function showKeyPrompt() {
+      document.getElementById('configTitle').textContent = 'Access key needed';
+      document.getElementById('apiUrl').value = getApiUrl();
+      document.getElementById('configPanel').style.display = 'block';
     }
     
     async function apiCall(action, params = {}) {
@@ -666,6 +748,8 @@
       
       const url = new URL(API_URL);
       url.searchParams.set('action', action);
+      const key = getApiKey();
+      if (key) url.searchParams.set('key', key);
       
       Object.keys(params).forEach(key => {
         if (typeof params[key] === 'object') {
@@ -676,22 +760,115 @@
       });
       
       const response = await fetch(url.toString());
-      return await response.json();
+      const data = await response.json();
+      
+      if (data && data.error) {
+        // The sheet answered and said no. (No signal never gets this far.)
+        const needKey = data.error === 'ACCESS_KEY_REQUIRED';
+        const err = new Error(needKey ? 'Access key needed' : data.error);
+        err.server = true;
+        err.needKey = needKey;
+        throw err;
+      }
+      
+      return data;
+    }
+    
+    // ------------------------------------------------------------
+    // Saving changes safely
+    // Every change is written to this phone first, then sent to the
+    // sheet. It is only removed from the phone once the sheet has
+    // confirmed it, so a visit's hours cannot be lost to bad signal.
+    // ------------------------------------------------------------
+    
+    async function send(action, params) {
+      const list = loadPending();
+      list.push({ action: action, params: params, at: new Date().toISOString() });
+      savePending(list);
+      await flushPending();
+      if (loadPending().length > 0) await flushPending();
+      return loadPending().length === 0;
+    }
+    
+    async function flushPending() {
+      if (flushing) return;
+      flushing = true;
+      try {
+        while (true) {
+          const list = loadPending();
+          if (list.length === 0) break;
+          const item = list[0];
+          try {
+            await apiCall(item.action, item.params);
+          } catch (err) {
+            if (err.needKey) { showKeyPrompt(); break; }
+            if (!err.server) break; // no signal - leave it on the phone and try again later
+            // The sheet refused this one change. Tell Gary, then carry on with the rest.
+            console.error('Change refused by the sheet:', item, err);
+            alert('One change could not be saved: ' + err.message);
+          }
+          const remaining = loadPending();
+          remaining.shift();
+          savePending(remaining);
+        }
+      } finally {
+        flushing = false;
+        updateBanner();
+      }
+    }
+    
+    function updateBanner() {
+      const banner = document.getElementById('pendingBanner');
+      if (!banner) return;
+      const count = loadPending().length;
+      if (count > 0) {
+        banner.className = 'pending-banner';
+        banner.textContent = '⏳ ' + count + (count === 1 ? ' change is' : ' changes are') + ' saved on this phone and will send when there is signal. Tap to try now.';
+        banner.style.display = 'block';
+      } else if (usingCache) {
+        banner.className = 'pending-banner offline';
+        banner.textContent = '📴 No signal. Showing the list saved earlier today. Tap to try again.';
+        banner.style.display = 'block';
+      } else {
+        banner.style.display = 'none';
+      }
+    }
+    
+    // Changes still waiting on the phone are newer than what the sheet says
+    function applyPending(list) {
+      loadPending().forEach(item => {
+        if (item.action !== 'updateBooking' || !item.params || !item.params.data) return;
+        const booking = list.find(b => b.id === item.params.data.id);
+        if (booking) Object.assign(booking, item.params.data);
+      });
+    }
+    
+    // Keep this phone's running clocks in step with the sheet
+    function syncTimers() {
+      bookings.forEach(b => {
+        const started = isValidTime(b.actualStartTime);
+        const ended = isValidTime(b.actualEndTime);
+        if (ended && activeTimers[b.id]) {
+          delete activeTimers[b.id]; // finished already
+        } else if (!ended && started && b.status === 'in_progress' && !activeTimers[b.id]) {
+          activeTimers[b.id] = new Date(b.actualStartTime).toISOString(); // started earlier, this phone had forgotten
+        }
+      });
+      saveTimers();
     }
     
     async function loadTodaysBookings() {
       document.getElementById('content').innerHTML = '<div class="loading"><div class="spinner"></div><div>Loading...</div></div>';
       
+      // Send anything still waiting before reading the sheet
+      await flushPending();
+      
+      const todayStr = todayString();
+      
       try {
         const data = await apiCall('getAllData');
         customers = data.customers || [];
         materialsList = data.materialsList || [];
-        
-        // Get today's date string
-        const today = new Date();
-        const todayStr = today.getFullYear() + '-' + 
-          String(today.getMonth() + 1).padStart(2, '0') + '-' + 
-          String(today.getDate()).padStart(2, '0');
         
         // Filter bookings for today
         bookings = (data.bookings || []).filter(b => {
@@ -699,30 +876,52 @@
           return bookingDate === todayStr;
         });
         
-        // Load existing materials for each booking
-        bookings.forEach(b => {
-          if (b.materials) {
-            try {
-              bookingMaterials[b.id] = JSON.parse(b.materials);
-            } catch (e) {
-              bookingMaterials[b.id] = [];
-            }
-          } else {
-            bookingMaterials[b.id] = [];
-          }
-        });
-        
-        renderBookings();
+        applyPending(bookings);
+        usingCache = false;
+        saveCache();
         
       } catch (err) {
-        document.getElementById('content').innerHTML = `
-          <div class="no-jobs">
-            <div class="icon">❌</div>
-            <div>Error: ${err.message}</div>
-          </div>
-        `;
-        document.getElementById('configPanel').style.display = 'block';
+        if (err.needKey) showKeyPrompt();
+        
+        // Could not reach the sheet: fall back to the list saved earlier today
+        const cache = readStore(CACHE_KEY, null);
+        if (cache && cache.date === todayStr) {
+          bookings = cache.bookings || [];
+          customers = cache.customers || [];
+          materialsList = cache.materialsList || [];
+          usingCache = true;
+        } else {
+          document.getElementById('content').innerHTML = `
+            <div class="no-jobs">
+              <div class="icon">❌</div>
+              <div>Could not load today's jobs: ${err.message}</div>
+            </div>
+          `;
+          document.getElementById('apiUrl').value = getApiUrl();
+          document.getElementById('configPanel').style.display = 'block';
+          updateBanner();
+          return;
+        }
       }
+      
+      syncTimers();
+      
+      // Load existing materials for each booking
+      bookingMaterials = {};
+      bookings.forEach(b => {
+        if (b.materials) {
+          try {
+            bookingMaterials[b.id] = JSON.parse(b.materials);
+          } catch (e) {
+            bookingMaterials[b.id] = [];
+          }
+        } else {
+          bookingMaterials[b.id] = [];
+        }
+      });
+      
+      renderBookings();
+      updateBanner();
     }
     
     function getCustomerById(id) {
@@ -771,7 +970,7 @@
         const customer = getCustomerById(booking.customerId);
         const isActive = activeTimers[booking.id];
         // Check for valid date, not just truthy (empty string is falsy but comes from sheet as truthy)
-        const isCompleted = booking.actualEndTime && booking.actualEndTime !== '' && !isNaN(new Date(booking.actualEndTime).getTime());
+        const isCompleted = isValidTime(booking.actualEndTime);
         
         let cardClass = 'job-card';
         if (booking.type === 'TSC') cardClass += ' solo';
@@ -910,63 +1109,59 @@
     async function startJob(bookingId) {
       const now = new Date();
       activeTimers[bookingId] = now.toISOString();
-      localStorage.setItem('organWorks_activeTimers', JSON.stringify(activeTimers));
+      saveTimers();
       
-      // Update booking in database
-      try {
-        await apiCall('updateBooking', {
-          data: {
-            id: bookingId,
-            actualStartTime: now.toISOString(),
-            status: 'in_progress'
-          }
-        });
-      } catch (err) {
-        console.error('Failed to update booking:', err);
+      const booking = bookings.find(b => b.id === bookingId);
+      if (booking) {
+        booking.actualStartTime = now.toISOString();
+        booking.status = 'in_progress';
       }
-      
+      saveCache();
       renderBookings();
+      
+      await send('updateBooking', {
+        data: {
+          id: bookingId,
+          actualStartTime: now.toISOString(),
+          status: 'in_progress'
+        }
+      });
     }
     
     async function stopJob(bookingId) {
+      if (!activeTimers[bookingId]) return;
+      
       const now = new Date();
       const startTime = new Date(activeTimers[bookingId]);
-      const durationHours = (now - startTime) / (1000 * 60 * 60);
+      const durationHours = Math.round(((now - startTime) / (1000 * 60 * 60)) * 100) / 100;
       
-      // Clear timer
+      const change = {
+        id: bookingId,
+        actualStartTime: startTime.toISOString(),
+        actualEndTime: now.toISOString(),
+        actualHours: durationHours,
+        status: 'completed'
+      };
+      
+      // 1. Write the finished visit to this phone's waiting list (happens straight away)
+      const sending = send('updateBooking', { data: change });
+      
+      // 2. Show it as finished here
+      const booking = bookings.find(b => b.id === bookingId);
+      if (booking) Object.assign(booking, change);
+      saveCache();
+      
+      // 3. Only now is it safe to clear the clock
       delete activeTimers[bookingId];
-      localStorage.setItem('organWorks_activeTimers', JSON.stringify(activeTimers));
+      saveTimers();
       
       if (elapsedIntervals[bookingId]) {
         clearInterval(elapsedIntervals[bookingId]);
         delete elapsedIntervals[bookingId];
       }
       
-      // Update booking in database
-      try {
-        await apiCall('updateBooking', {
-          data: {
-            id: bookingId,
-            actualEndTime: now.toISOString(),
-            actualHours: Math.round(durationHours * 100) / 100,
-            status: 'completed'
-          }
-        });
-        
-        // Update local booking
-        const booking = bookings.find(b => b.id === bookingId);
-        if (booking) {
-          booking.actualStartTime = startTime.toISOString();
-          booking.actualEndTime = now.toISOString();
-          booking.actualHours = Math.round(durationHours * 100) / 100;
-        }
-        
-      } catch (err) {
-        console.error('Failed to update booking:', err);
-        alert('Failed to save. Check connection.');
-      }
-      
       renderBookings();
+      await sending;
     }
     
     async function addMaterial(bookingId) {
@@ -1113,17 +1308,17 @@
     }
     
     async function saveMaterials(bookingId) {
-      try {
-        await apiCall('updateBooking', {
-          data: {
-            id: bookingId,
-            materials: JSON.stringify(bookingMaterials[bookingId] || [])
-          }
-        });
-      } catch (err) {
-        console.error('Failed to save materials:', err);
-        alert('Failed to save materials. Check connection.');
-      }
+      const materialsJson = JSON.stringify(bookingMaterials[bookingId] || []);
+      const booking = bookings.find(b => b.id === bookingId);
+      if (booking) booking.materials = materialsJson;
+      saveCache();
+      
+      await send('updateBooking', {
+        data: {
+          id: bookingId,
+          materials: materialsJson
+        }
+      });
     }
     
     // Ticket Modal Functions
@@ -1175,24 +1370,19 @@
         return;
       }
       
-      try {
-        await apiCall('addTicket', {
-          data: {
-            customerId: customerId,
-            type: type,
-            description: description,
-            dueDate: dueType === 'next-visit' ? '' : (dueMonth ? dueMonth + '-01' : ''),
-            dueType: dueType,
-            status: 'new'
-          }
-        });
-        
-        closeTicketModal();
-        alert('✅ Ticket saved!');
-      } catch (err) {
-        console.error('Failed to save ticket:', err);
-        alert('Failed to save ticket: ' + err.message);
-      }
+      const sent = await send('addTicket', {
+        data: {
+          customerId: customerId,
+          type: type,
+          description: description,
+          dueDate: dueType === 'next-visit' ? '' : (dueMonth ? dueMonth + '-01' : ''),
+          dueType: dueType,
+          status: 'new'
+        }
+      });
+      
+      closeTicketModal();
+      alert(sent ? '✅ Ticket saved!' : '📋 Ticket kept on this phone. It will send when there is signal.');
     }
   </script>
 </body>
