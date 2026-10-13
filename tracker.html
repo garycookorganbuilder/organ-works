@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Job Tracker · 13 Oct 2026 · access key -->
+<!-- Job Tracker · 13 Oct 2026 (b) · timers left running are stopped at midnight; access key -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -879,7 +879,8 @@
         
         const historyHtml = summary.timeEntries.slice(-5).reverse().map(e => {
           const start = new Date(e.startTime);
-          const duration = e.duration ? e.duration.toFixed(2) + ' hrs' : 'running...';
+          const autoStopped = e.notes && String(e.notes).includes('Auto-stopped');
+          const duration = (e.duration ? Number(e.duration).toFixed(2) + ' hrs' : (e.endTime ? '0.00 hrs' : 'running...')) + (autoStopped ? ' ⚠️ stopped at midnight' : '');
           return `<div class="history-item">
             <span>${start.toLocaleDateString('en-GB')} ${start.toLocaleTimeString('en-GB', {hour: '2-digit', minute:'2-digit'})}</span>
             <span>${duration}</span>
@@ -983,6 +984,16 @@
         await refreshJobSummary();
         
       } catch (err) {
+        if (err.message && err.message.includes('No active timer')) {
+          // The backend stops any timer left running at midnight
+          clearInterval(timerInterval);
+          timerInterval = null;
+          timerStartTime = null;
+          hideStopModal();
+          alert('This timer had already been stopped. Timers left running are stopped at midnight. Check the hours under Recent Sessions.');
+          await showTracker();
+          return;
+        }
         alert('Failed to stop timer: ' + err.message);
       }
     }
