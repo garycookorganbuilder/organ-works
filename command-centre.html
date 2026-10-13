@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Command Centre · 13 Oct 2026 (b) · time left counted Mon-Wed from today; contact delete fix; ticket booking fix; access key; jobs started on the phone -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -74,12 +75,16 @@ const { useState, useEffect, useCallback, useMemo, useRef } = React;
 
 const getApiUrl = () => localStorage.getItem('organWorks_apiUrl') || '';
 const setApiUrl = (url) => localStorage.setItem('organWorks_apiUrl', url);
+const getApiKey = () => localStorage.getItem('organWorks_apiKey') || '';
+const setApiKey = (key) => localStorage.setItem('organWorks_apiKey', key);
 
 const apiCall = async (action, params = {}) => {
   const API_URL = getApiUrl();
   if (!API_URL) throw new Error('API URL not configured');
   const url = new URL(API_URL);
   url.searchParams.set('action', action);
+  const apiKey = getApiKey();
+  if (apiKey) url.searchParams.set('key', apiKey);
   Object.keys(params).forEach(key => {
     if (typeof params[key] === 'object') {
       url.searchParams.set(key, JSON.stringify(params[key]));
@@ -89,6 +94,13 @@ const apiCall = async (action, params = {}) => {
   });
   const response = await fetch(url.toString());
   const data = await response.json();
+  if (data && data.error === 'ACCESS_KEY_REQUIRED') {
+    // The backend is locked and this device has no key (or the wrong one)
+    window.dispatchEvent(new Event('organworks-needkey'));
+    const err = new Error('Access key needed');
+    err.needKey = true;
+    throw err;
+  }
   if (data && data.error) throw new Error(data.error);
   return data;
 };
@@ -104,6 +116,9 @@ const CommandCentre = () => {
   // State
   const [isConfigured, setIsConfigured] = useState(!!getApiUrl());
   const [configUrl, setConfigUrl] = useState('');
+  const [needsKey, setNeedsKey] = useState(false);
+  const [keyInput, setKeyInput] = useState('');
+  const [keyTried, setKeyTried] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState(null);
@@ -267,13 +282,20 @@ const CommandCentre = () => {
       setMaterials(data.materials || []);
     } catch (err) {
       console.error('Failed to load data:', err);
-      alert('Failed to load data: ' + err.message);
+      if (!err.needKey) alert('Failed to load data: ' + err.message);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => { if (isConfigured) loadData(); }, [isConfigured, loadData]);
+
+  // The backend asks for the access key
+  useEffect(() => {
+    const onNeedKey = () => setNeedsKey(true);
+    window.addEventListener('organworks-needkey', onNeedKey);
+    return () => window.removeEventListener('organworks-needkey', onNeedKey);
+  }, []);
 
   const syncContactsToGoogle = async () => {
     setSyncing(true);
@@ -354,122 +376,122 @@ const CommandCentre = () => {
 
   // ============================================================
   // CAPACITY PLANNING
+  // The plan is Mon-Wed. Thursday is the 4th day (only if needed).
+  // Friday is admin and is never counted. Everything is counted
+  // from today forward, so days already gone are not "free".
   // ============================================================
-  
+
+  const PLAN_DAYS = [1, 2, 3];   // Mon, Tue, Wed
+  const STRETCH_DAY = 4;         // Thu
+  const ADMIN_DAY = 5;           // Fri
+  const TUNINGS_PER_DAY = 2;
+
+  const isTuningType = (type) => type === 'OTS' || type === 'TSC' || type === 'WS' || (type || '').startsWith('tuning');
+
   const capacityData = useMemo(() => {
     const now = new Date();
     const today = getDateString(now.getFullYear(), now.getMonth(), now.getDate());
-    
-    let totalTuningsExpected = 0;
-    customers.forEach(c => {
-      if (c.tuningMonths && c.tuningMonths.length > 0) {
-        totalTuningsExpected += c.tuningMonths.length;
-      }
-    });
-    
-    const tuningsBookedThisYear = bookings.filter(b => {
-      if (!b.date) return false;
-      const bookingYear = parseInt(b.date.split('-')[0]);
-      if (bookingYear !== currentYear) return false;
-      return b.type === 'OTS' || b.type === 'TSC' || b.type?.startsWith('tuning');
-    }).length;
-    
-    const tuningsRemaining = Math.max(0, totalTuningsExpected - tuningsBookedThisYear);
-    const daysNeededForTunings = Math.ceil(tuningsRemaining / 2);
-    
-    const getAllWorkdays = () => {
-      const workdays = [];
-      for (let month = 0; month < 12; month++) {
-        const daysInMonth = new Date(currentYear, month + 1, 0).getDate();
-        for (let day = 1; day <= daysInMonth; day++) {
-          const dow = new Date(currentYear, month, day).getDay();
-          if (dow >= 1 && dow <= 5) {
-            workdays.push(getDateString(currentYear, month, day));
-          }
-        }
-      }
-      return workdays;
-    };
-    
-    const allWorkdays = getAllWorkdays();
-    const totalWorkdays = allWorkdays.length;
-    
-    const daysOffThisYear = daysOff.filter(d => d && d.date && parseInt(d.date.split('-')[0]) === currentYear);
-    const daysOffDatesThisYear = daysOffThisYear.map(d => d.date);
-    const availableWorkdays = allWorkdays.filter(d => !daysOffDatesThisYear.includes(d));
-    
+    const thisYear = now.getFullYear();
+    const thisMonth = now.getMonth();
+
+    const daysOffDates = new Set(daysOff.map(d => (typeof d === 'string' ? d : d && d.date)).filter(Boolean));
     const yearBookings = bookings.filter(b => b.date && parseInt(b.date.split('-')[0]) === currentYear);
-    
-    const tuningDays = new Set();
-    const faultDays = new Set();
-    const projectDays = new Set();
-    
-    yearBookings.forEach(b => {
-      if (b.type === 'OTS' || b.type === 'TSC' || b.type === 'WS' || b.type?.startsWith('tuning')) {
-        tuningDays.add(b.date);
-      } else if (b.type === 'fault') {
-        faultDays.add(b.date);
-      } else if (b.type === 'project') {
-        projectDays.add(b.date);
+    const bookingsByDate = {};
+    yearBookings.forEach(b => { (bookingsByDate[b.date] = bookingsByDate[b.date] || []).push(b); });
+
+    // Days still to come in the year being viewed
+    const planDates = [];      // Mon-Wed, not a day off
+    const stretchDates = [];   // Thursdays, not a day off
+    let planDaysOff = 0;
+    for (let month = 0; month < 12; month++) {
+      const daysInMonth = new Date(currentYear, month + 1, 0).getDate();
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = getDateString(currentYear, month, day);
+        if (dateStr < today) continue;
+        const dow = new Date(currentYear, month, day).getDay();
+        const isPlan = PLAN_DAYS.includes(dow);
+        if (!isPlan && dow !== STRETCH_DAY) continue;
+        if (daysOffDates.has(dateStr)) { if (isPlan) planDaysOff++; continue; }
+        (isPlan ? planDates : stretchDates).push(dateStr);
       }
+    }
+
+    // Which of those days already have something booked
+    let tuningDaysBooked = 0, faultDaysBooked = 0, projectDaysBooked = 0, otherDaysBooked = 0;
+    const freePlanDates = [];
+    planDates.forEach(d => {
+      const list = bookingsByDate[d];
+      if (!list) { freePlanDates.push(d); return; }
+      if (list.some(b => isTuningType(b.type))) tuningDaysBooked++;
+      else if (list.some(b => b.type === 'fault')) faultDaysBooked++;
+      else if (list.some(b => b.type === 'project')) projectDaysBooked++;
+      else otherDaysBooked++;
     });
-    
-    const bookedDates = new Set(yearBookings.map(b => b.date));
-    
+    const freeStretchDates = stretchDates.filter(d => !bookingsByDate[d]);
+
+    // Tunings still to book: due this month or later and not yet in the diary
+    let tuningsToBook = 0, tuningsOverdue = 0;
+    customers.forEach(c => {
+      (c.tuningMonths || []).forEach(m => {
+        const monthIdx = Number(m);
+        if (isCustomerBookedInMonth(c.id, monthIdx, currentYear)) return;
+        if (currentYear > thisYear || (currentYear === thisYear && monthIdx >= thisMonth)) tuningsToBook++;
+        else if (currentYear === thisYear) tuningsOverdue++;
+      });
+    });
+    const daysNeededForTunings = Math.ceil(tuningsToBook / TUNINGS_PER_DAY);
+
+    // Big job days still to place this year
     let plannedProjectDays = 0;
-    projects.filter(p => p.status === 'active').forEach(p => {
-      const yearStart = parseInt(p.yearStart) || parseInt(p.targetYear) || currentYear;
-      const yearEnd = parseInt(p.yearEnd) || parseInt(p.targetYear) || currentYear;
-      
-      if (currentYear >= yearStart && currentYear <= yearEnd) {
-        const estimatedDays = parseInt(p.estimatedDays) || 0;
-        const yearsSpanned = yearEnd - yearStart + 1;
-        const daysThisYear = Math.ceil(estimatedDays / yearsSpanned);
-        const bookedForProjectThisYear = yearBookings.filter(b => b.projectId === p.id).length;
-        plannedProjectDays += Math.max(0, daysThisYear - bookedForProjectThisYear);
-      }
-    });
-    
-    const unbookedDays = availableWorkdays.filter(d => !bookedDates.has(d));
-    const daysFreeForProjects = Math.max(0, unbookedDays.length - daysNeededForTunings - plannedProjectDays);
-    
-    const totalCommitted = daysNeededForTunings + plannedProjectDays;
-    const isOvercommitted = totalCommitted > unbookedDays.length;
-    const overcommittedBy = isOvercommitted ? totalCommitted - unbookedDays.length : 0;
-    
-    const futureUnbookedDays = unbookedDays.filter(d => d >= today);
-    const reservedDays = new Set();
-    const plannedDays = new Set();
-    const sortedFutureUnbooked = [...futureUnbookedDays].sort((a, b) => a.localeCompare(b));
-    
-    for (let i = 0; i < Math.min(daysNeededForTunings, sortedFutureUnbooked.length); i++) {
-      reservedDays.add(sortedFutureUnbooked[i]);
+    if (currentYear >= thisYear) {
+      projects.filter(p => p.status === 'active').forEach(p => {
+        const yearStart = parseInt(p.yearStart) || parseInt(p.targetYear) || currentYear;
+        const yearEnd = parseInt(p.yearEnd) || parseInt(p.targetYear) || currentYear;
+        if (currentYear >= yearStart && currentYear <= yearEnd) {
+          const estimatedDays = parseInt(p.estimatedDays) || 0;
+          const yearsSpanned = yearEnd - yearStart + 1;
+          const daysThisYear = Math.ceil(estimatedDays / yearsSpanned);
+          const bookedForProjectThisYear = yearBookings.filter(b => b.projectId === p.id).length;
+          plannedProjectDays += Math.max(0, daysThisYear - bookedForProjectThisYear);
+        }
+      });
     }
-    for (let i = daysNeededForTunings; i < Math.min(daysNeededForTunings + plannedProjectDays, sortedFutureUnbooked.length); i++) {
-      plannedDays.add(sortedFutureUnbooked[i]);
-    }
-    
+
+    const planDaysLeft = planDates.length;
+    const freePlanCount = freePlanDates.length;
+    const bookedPlanCount = planDaysLeft - freePlanCount;
+    const daysToPlace = daysNeededForTunings + plannedProjectDays;
+    const freeAtThree = freePlanCount - daysToPlace;            // negative = short
+    const daysFreeForProjects = Math.max(0, freeAtThree);
+    const isOvercommitted = freeAtThree < 0;
+    const overcommittedBy = isOvercommitted ? -freeAtThree : 0;
+    const stretchFree = freeStretchDates.length;
+
+    // Calendar colouring: work still to place fills the next free Mon-Wed days
+    const reservedDays = new Set(freePlanDates.slice(0, daysNeededForTunings));
+    const plannedDays = new Set(freePlanDates.slice(daysNeededForTunings, daysNeededForTunings + plannedProjectDays));
+
     return {
-      totalTuningsExpected,
-      tuningsBookedThisYear,
-      tuningsRemaining,
+      today,
+      planDaysLeft,
+      planDaysOff,
+      freePlanCount,
+      bookedPlanCount,
+      tuningDaysBooked,
+      faultDaysBooked,
+      projectDaysBooked,
+      otherDaysBooked,
+      tuningsToBook,
+      tuningsOverdue,
       daysNeededForTunings,
-      totalWorkdays,
-      daysOffCount: daysOffThisYear.length,
-      availableDays: availableWorkdays.length,
-      bookedDays: bookedDates.size,
-      tuningDaysBooked: tuningDays.size,
-      faultDaysBooked: faultDays.size,
-      projectDaysBooked: projectDays.size,
       plannedProjectDays,
-      unbookedDaysCount: unbookedDays.length,
-      futureUnbookedCount: futureUnbookedDays.length,
+      freeAtThree,
       daysFreeForProjects,
       isOvercommitted,
       overcommittedBy,
+      stretchFree,
       reservedDays,
       plannedDays,
-      today,
     };
   }, [customers, bookings, daysOff, projects, currentYear]);
 
@@ -478,59 +500,61 @@ const CommandCentre = () => {
   // ============================================================
   
   const CapacityBar = () => {
-    const { 
-      totalWorkdays, daysOffCount, availableDays, bookedDays, 
-      daysNeededForTunings, daysFreeForProjects, isOvercommitted, overcommittedBy,
-      totalTuningsExpected, tuningsBookedThisYear, tuningsRemaining, unbookedDaysCount,
-      tuningDaysBooked, faultDaysBooked, projectDaysBooked, plannedProjectDays
-    } = capacityData;
-    
-    const barTotal = availableDays;
-    const tuningWidth = (tuningDaysBooked / barTotal) * 100;
-    const faultWidth = (faultDaysBooked / barTotal) * 100;
-    const projectWidth = (projectDaysBooked / barTotal) * 100;
-    const reservedWidth = Math.min((daysNeededForTunings / barTotal) * 100, 100 - tuningWidth - faultWidth - projectWidth);
-    const plannedWidth = Math.min((plannedProjectDays / barTotal) * 100, 100 - tuningWidth - faultWidth - projectWidth - reservedWidth);
-    const freeWidth = Math.max(0, 100 - tuningWidth - faultWidth - projectWidth - reservedWidth - plannedWidth);
+    const c = capacityData;
+    const barTotal = Math.max(1, c.planDaysLeft);
+    const pct = (n) => `${(n / barTotal) * 100}%`;
+    const reservedShown = Math.min(c.daysNeededForTunings, c.freePlanCount);
+    const plannedShown = Math.min(c.plannedProjectDays, c.freePlanCount - reservedShown);
+    const freeShown = Math.max(0, c.freePlanCount - reservedShown - plannedShown);
+    const freeColour = c.isOvercommitted ? 'text-red-600' : c.daysFreeForProjects > 10 ? 'text-green-600' : 'text-amber-600';
+    const stretchCovers = c.isOvercommitted && c.stretchFree >= c.overcommittedBy;
     
     return (
       <div className="bg-white rounded-lg shadow p-4 mb-3">
         <div className="flex justify-between items-center mb-2">
-          <h3 className="font-bold text-lg">📊 Capacity {currentYear}</h3>
-          <button onClick={() => setShowCapacityDetails(!showCapacityDetails)} className="text-sm text-blue-600 hover:underline">
+          <h3 className="font-bold text-lg">📊 Time left {currentYear}</h3>
+          <button onClick={() => setShowCapacityDetails(!showCapacityDetails)} className="text-sm text-blue-600 hover:underline px-3 py-2">
             {showCapacityDetails ? 'Hide details' : 'Show details'}
           </button>
         </div>
         
+        <div className="flex flex-wrap items-baseline gap-x-8 gap-y-1 mb-3">
+          <div><span className="text-4xl font-bold">{c.planDaysLeft}</span> <span className="text-lg text-gray-600">working days left (Mon–Wed)</span></div>
+          <div><span className={`text-4xl font-bold ${freeColour}`}>{c.isOvercommitted ? c.overcommittedBy : c.daysFreeForProjects}</span> <span className="text-lg text-gray-600">{c.isOvercommitted ? 'days short' : 'still free'}</span></div>
+          <div><span className="text-2xl font-bold text-gray-700">+{c.stretchFree}</span> <span className="text-lg text-gray-600">Thursdays if needed</span></div>
+        </div>
+        
         <div className="capacity-bar bg-gray-200 mb-2">
-          {tuningDaysBooked > 0 && <div className="capacity-segment bg-blue-500" style={{ width: `${tuningWidth}%` }} title={`Tunings: ${tuningDaysBooked} days`}></div>}
-          {faultDaysBooked > 0 && <div className="capacity-segment bg-orange-400" style={{ width: `${faultWidth}%` }} title={`Faults: ${faultDaysBooked} days`}></div>}
-          {projectDaysBooked > 0 && <div className="capacity-segment bg-pink-400" style={{ width: `${projectWidth}%` }} title={`Projects booked: ${projectDaysBooked} days`}></div>}
-          <div className="capacity-segment bg-amber-200 border-y border-amber-300" style={{ width: `${reservedWidth}%` }} title={`Reserved for tunings: ${daysNeededForTunings} days`}></div>
-          {plannedProjectDays > 0 && <div className="capacity-segment bg-pink-200 border-y border-pink-300" style={{ width: `${plannedWidth}%` }} title={`Planned projects: ${plannedProjectDays} days`}></div>}
-          <div className="capacity-segment bg-green-200 border-y border-green-300" style={{ width: `${freeWidth}%` }} title={`Free: ${daysFreeForProjects} days`}></div>
+          {c.tuningDaysBooked > 0 && <div className="capacity-segment bg-blue-500" style={{ width: pct(c.tuningDaysBooked) }}></div>}
+          {c.faultDaysBooked > 0 && <div className="capacity-segment bg-orange-400" style={{ width: pct(c.faultDaysBooked) }}></div>}
+          {c.projectDaysBooked > 0 && <div className="capacity-segment bg-pink-400" style={{ width: pct(c.projectDaysBooked) }}></div>}
+          {c.otherDaysBooked > 0 && <div className="capacity-segment bg-gray-400" style={{ width: pct(c.otherDaysBooked) }}></div>}
+          {reservedShown > 0 && <div className="capacity-segment bg-amber-200 border-y border-amber-300" style={{ width: pct(reservedShown) }}></div>}
+          {plannedShown > 0 && <div className="capacity-segment bg-pink-200 border-y border-pink-300" style={{ width: pct(plannedShown) }}></div>}
+          {freeShown > 0 && <div className="capacity-segment bg-green-200 border-y border-green-300" style={{ width: pct(freeShown) }}></div>}
         </div>
         
         <div className="flex flex-wrap gap-4 text-sm">
-          {tuningDaysBooked > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-blue-500 rounded"></div><span>Tunings: <strong>{tuningDaysBooked}</strong></span></div>}
-          {faultDaysBooked > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-orange-400 rounded"></div><span>Faults: <strong>{faultDaysBooked}</strong></span></div>}
-          {projectDaysBooked > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-pink-400 rounded"></div><span>Projects: <strong>{projectDaysBooked}</strong></span></div>}
-          <div className="flex items-center gap-2"><div className="w-4 h-4 bg-amber-200 border border-amber-300 rounded"></div><span>Reserved: <strong>{daysNeededForTunings}</strong></span></div>
-          {plannedProjectDays > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-pink-200 border border-pink-300 rounded"></div><span>Planned: <strong>{plannedProjectDays}</strong></span></div>}
-          <div className="flex items-center gap-2"><div className="w-4 h-4 bg-green-200 border border-green-300 rounded"></div><span>Free: <strong className={daysFreeForProjects > 20 ? 'text-green-600' : daysFreeForProjects > 0 ? 'text-amber-600' : 'text-red-600'}>{daysFreeForProjects}</strong></span></div>
-          {isOvercommitted && <div className="flex items-center gap-2 text-red-600 font-bold">⚠️ Overcommitted by {overcommittedBy} days!</div>}
+          {c.tuningDaysBooked > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-blue-500 rounded"></div><span>Tunings booked: <strong>{c.tuningDaysBooked}</strong></span></div>}
+          {c.faultDaysBooked > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-orange-400 rounded"></div><span>Faults booked: <strong>{c.faultDaysBooked}</strong></span></div>}
+          {c.projectDaysBooked > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-pink-400 rounded"></div><span>Big jobs booked: <strong>{c.projectDaysBooked}</strong></span></div>}
+          {c.otherDaysBooked > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-gray-400 rounded"></div><span>Other booked: <strong>{c.otherDaysBooked}</strong></span></div>}
+          <div className="flex items-center gap-2"><div className="w-4 h-4 bg-amber-200 border border-amber-300 rounded"></div><span>Tunings to fit in: <strong>{c.daysNeededForTunings}</strong></span></div>
+          {c.plannedProjectDays > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-pink-200 border border-pink-300 rounded"></div><span>Big job days to fit in: <strong>{c.plannedProjectDays}</strong></span></div>}
+          <div className="flex items-center gap-2"><div className="w-4 h-4 bg-green-200 border border-green-300 rounded"></div><span>Free: <strong className={freeColour}>{c.daysFreeForProjects}</strong></span></div>
+          {c.isOvercommitted && <div className="flex items-center gap-2 text-red-600 font-bold">⚠️ {c.overcommittedBy} days short at 3 a week — {stretchCovers ? 'Thursdays would cover it' : `Thursdays only cover ${c.stretchFree}`}</div>}
         </div>
         
         {showCapacityDetails && (
           <div className="mt-4 pt-4 border-t grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-            <div className="bg-gray-50 p-3 rounded"><div className="text-gray-500">Total workdays</div><div className="text-2xl font-bold">{totalWorkdays}</div><div className="text-xs text-gray-400">Mon-Fri all year</div></div>
-            <div className="bg-gray-50 p-3 rounded"><div className="text-gray-500">Days off</div><div className="text-2xl font-bold">{daysOffCount}</div></div>
-            <div className="bg-gray-50 p-3 rounded"><div className="text-gray-500">Available</div><div className="text-2xl font-bold">{availableDays}</div><div className="text-xs text-gray-400">workdays − off</div></div>
-            <div className="bg-gray-50 p-3 rounded"><div className="text-gray-500">Booked</div><div className="text-2xl font-bold">{bookedDays}</div><div className="text-xs text-gray-400">{tuningDaysBooked}T + {faultDaysBooked}F + {projectDaysBooked}P</div></div>
-            <div className="bg-blue-50 p-3 rounded"><div className="text-blue-600">Tunings expected</div><div className="text-2xl font-bold text-blue-700">{totalTuningsExpected}</div><div className="text-xs text-blue-500">{tuningsBookedThisYear} booked</div></div>
-            <div className="bg-amber-50 p-3 rounded"><div className="text-amber-600">Tunings remaining</div><div className="text-2xl font-bold text-amber-700">{tuningsRemaining}</div><div className="text-xs text-amber-500">= {daysNeededForTunings} days @ 2/day</div></div>
-            <div className="bg-pink-50 p-3 rounded"><div className="text-pink-600">Project days</div><div className="text-2xl font-bold text-pink-700">{projectDaysBooked}</div><div className="text-xs text-pink-500">booked</div></div>
-            <div className={`p-3 rounded ${daysFreeForProjects > 20 ? 'bg-green-50' : daysFreeForProjects > 0 ? 'bg-amber-50' : 'bg-red-50'}`}><div className={daysFreeForProjects > 20 ? 'text-green-600' : daysFreeForProjects > 0 ? 'text-amber-600' : 'text-red-600'}>Free for projects</div><div className={`text-2xl font-bold ${daysFreeForProjects > 20 ? 'text-green-700' : daysFreeForProjects > 0 ? 'text-amber-700' : 'text-red-700'}`}>{daysFreeForProjects}</div><div className="text-xs text-gray-500">{unbookedDaysCount} unbooked − {daysNeededForTunings} tunings</div></div>
+            <div className="bg-gray-50 p-3 rounded"><div className="text-gray-500">Working days left</div><div className="text-2xl font-bold">{c.planDaysLeft}</div><div className="text-xs text-gray-400">Mon–Wed, from today</div></div>
+            <div className="bg-gray-50 p-3 rounded"><div className="text-gray-500">Days off</div><div className="text-2xl font-bold">{c.planDaysOff}</div><div className="text-xs text-gray-400">on Mon–Wed, still to come</div></div>
+            <div className="bg-gray-50 p-3 rounded"><div className="text-gray-500">Already booked</div><div className="text-2xl font-bold">{c.bookedPlanCount}</div><div className="text-xs text-gray-400">{c.tuningDaysBooked}T + {c.faultDaysBooked}F + {c.projectDaysBooked}P{c.otherDaysBooked > 0 ? ` + ${c.otherDaysBooked} other` : ''}</div></div>
+            <div className="bg-gray-50 p-3 rounded"><div className="text-gray-500">Not yet booked</div><div className="text-2xl font-bold">{c.freePlanCount}</div><div className="text-xs text-gray-400">Mon–Wed days with nothing on</div></div>
+            <div className="bg-amber-50 p-3 rounded"><div className="text-amber-600">Tunings to book</div><div className="text-2xl font-bold text-amber-700">{c.tuningsToBook}</div><div className="text-xs text-amber-500">= {c.daysNeededForTunings} days @ {TUNINGS_PER_DAY}/day{c.tuningsOverdue > 0 ? ` · ${c.tuningsOverdue} from earlier months not counted` : ''}</div></div>
+            <div className="bg-pink-50 p-3 rounded"><div className="text-pink-600">Big job days to fit in</div><div className="text-2xl font-bold text-pink-700">{c.plannedProjectDays}</div><div className="text-xs text-pink-500">estimate − days in the diary</div></div>
+            <div className={`p-3 rounded ${c.isOvercommitted ? 'bg-red-50' : 'bg-green-50'}`}><div className={c.isOvercommitted ? 'text-red-600' : 'text-green-600'}>{c.isOvercommitted ? 'Short at 3 days a week' : 'Free at 3 days a week'}</div><div className={`text-2xl font-bold ${c.isOvercommitted ? 'text-red-700' : 'text-green-700'}`}>{c.isOvercommitted ? c.overcommittedBy : c.daysFreeForProjects}</div><div className="text-xs text-gray-500">{c.freePlanCount} not booked − {c.daysNeededForTunings} tunings − {c.plannedProjectDays} big job</div></div>
+            <div className="bg-gray-50 p-3 rounded"><div className="text-gray-500">Thursdays free</div><div className="text-2xl font-bold">{c.stretchFree}</div><div className="text-xs text-gray-400">4th day, only if needed</div></div>
           </div>
         )}
       </div>
@@ -834,7 +858,7 @@ const CommandCentre = () => {
     
     if (allocatingProject) { toggleProjectDay(dateStr); return; }
     if (selectedCustomerToBook) { 
-      const isFault = selectedTicketToBook !== null;
+      const isFault = selectedTicketToBook !== null && (selectedTicketToBook.type || 'fault') === 'fault';
       const type = isFault ? 'fault' : bookingType;
       const price = customQuote ? parseFloat(customQuote) : (isFault ? DEFAULT_PRICES.fault : 0); 
       
@@ -929,7 +953,7 @@ const CommandCentre = () => {
     const customer = getCustomerById(ticket.customerId);
     setSelectedCustomerToBook(customer);
     setSelectedTicketToBook(ticket);
-    setBookingType('TSC');
+    setBookingType((ticket.type || 'fault') === 'tuning' ? 'OTS' : 'TSC');
     setJobNotes(ticket.description);
   };
 
@@ -1161,7 +1185,7 @@ const CommandCentre = () => {
     
     startBgSave();
     try {
-      await apiCall('deleteContact', { id: contactId });
+      await apiCall('deleteContact', { contactId });
       endBgSave(true);
     } catch (err) {
       if (contactToDelete) {
@@ -1229,6 +1253,27 @@ const CommandCentre = () => {
     );
   }
 
+  if (needsKey && !loading) {
+    const submitKey = () => {
+      if (!keyInput.trim()) return;
+      setApiKey(keyInput.trim());
+      setKeyTried(true);
+      setNeedsKey(false);
+      loadData();
+    };
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center p-8">
+        <div className="bg-white rounded-2xl p-8 max-w-lg w-full shadow-2xl">
+          <h1 className="text-3xl font-bold mb-2">🔑 Access key</h1>
+          <p className="text-gray-600 mb-6">The database is locked. Type the access key for this device. You only need to do this once.</p>
+          {keyTried && <div className="mb-4 p-3 rounded-lg bg-red-100 text-red-700 font-medium">That key was not accepted. Check it and try again.</div>}
+          <input type="text" value={keyInput} onChange={(e) => setKeyInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submitKey(); }} placeholder="xxxx-xxxx-xxxx-xxxx-xxxx" autoCapitalize="off" autoComplete="off" spellCheck={false} className="w-full p-4 text-xl border-2 rounded-lg mb-6 font-mono" />
+          <button onClick={submitKey} className="w-full bg-blue-600 text-white py-4 rounded-lg text-xl font-bold hover:bg-blue-700">Unlock</button>
+        </div>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
@@ -1279,7 +1324,11 @@ const CommandCentre = () => {
                   
                   const isReservedForTuning = !hasBooking && isWork && !isOff && !isPast && capacityData.reservedDays.has(dateStr);
                   const isPlannedForProject = !hasBooking && isWork && !isOff && !isPast && capacityData.plannedDays.has(dateStr);
-                  const isFreeForProjects = !hasBooking && isWork && !isOff && !isPast && !capacityData.reservedDays.has(dateStr) && !capacityData.plannedDays.has(dateStr);
+                  const dow = getDayOfWeek(monthData.year, monthData.month, day);
+                  const isPlanDay = PLAN_DAYS.includes(dow);
+                  const isAdminDay = dow === ADMIN_DAY;
+                  const isFreeForProjects = !hasBooking && isWork && !isOff && !isPast && isPlanDay && !capacityData.reservedDays.has(dateStr) && !capacityData.plannedDays.has(dateStr);
+                  const isStretchFree = !hasBooking && isWork && !isOff && !isPast && dow === STRETCH_DAY;
 
                   let cellClass = 'text-center border transition-all cursor-pointer relative ';
                   if (!isWork) cellClass += 'bg-gray-100 dim-when-booking';
@@ -1297,13 +1346,14 @@ const CommandCentre = () => {
                   else if (isReservedForTuning) cellClass += isSelecting ? 'bg-amber-300 hover:bg-amber-400' : 'bg-amber-200 hover:bg-amber-300';
                   else if (isPlannedForProject) cellClass += isSelecting ? 'bg-pink-300 hover:bg-pink-400' : 'bg-pink-200 hover:bg-pink-300';
                   else if (isFreeForProjects) cellClass += isSelecting ? 'bg-green-300 hover:bg-green-400' : 'bg-green-200 hover:bg-green-300';
-                  else cellClass += 'bg-green-50 hover:bg-green-100';
+                  else if (isStretchFree) cellClass += isSelecting ? 'bg-green-100 hover:bg-green-200' : 'bg-green-50 hover:bg-green-100';
+                  else cellClass += 'bg-white hover:bg-gray-100';
 
                   return (
                     <td key={dayIdx} onClick={() => handleDayClick(dateStr, monthData.year, monthData.month, day)} className={cellClass}>
                       {isToday && <div className="absolute inset-0 border-2 border-red-500 rounded pointer-events-none"></div>}
                       <div className="w-8 h-8 flex items-center justify-center mx-auto text-sm font-bold">
-                        {hasBooking ? (isProvisional ? '?' : dayBookings.length > 1 ? dayBookings.length : firstBookingType === 'project' ? 'P' : (firstBookingType === 'OTS' || firstBookingType === 'TSC' || firstBookingType?.startsWith('tuning')) ? '✓' : firstBookingType === 'fault' ? 'F' : '✓') : isWork && !isOff && !isPast ? '·' : ''}
+                        {hasBooking ? (isProvisional ? '?' : dayBookings.length > 1 ? dayBookings.length : firstBookingType === 'project' ? 'P' : (firstBookingType === 'OTS' || firstBookingType === 'TSC' || firstBookingType?.startsWith('tuning')) ? '✓' : firstBookingType === 'fault' ? 'F' : '✓') : isWork && !isOff && !isPast && !isAdminDay ? '·' : ''}
                       </div>
                     </td>
                   );
@@ -1319,6 +1369,8 @@ const CommandCentre = () => {
           <div className="flex items-center gap-2"><div className="w-6 h-6 bg-pink-400 rounded"></div> Project</div>
           <div className="flex items-center gap-2"><div className="w-6 h-6 bg-amber-200 rounded border border-amber-400"></div> Reserved</div>
           <div className="flex items-center gap-2"><div className="w-6 h-6 bg-green-200 rounded border border-green-400"></div> Free</div>
+          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-green-50 rounded border border-green-300"></div> 4th day (Thu)</div>
+          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-white rounded border border-gray-300"></div> Admin (Fri)</div>
           <div className="flex items-center gap-2"><div className="w-6 h-6 bg-yellow-200 rounded"></div> Day off</div>
           <div className="flex items-center gap-2"><div className="w-6 h-6 bg-white rounded border-2 border-red-500"></div> Today</div>
         </div>
@@ -1401,7 +1453,7 @@ const CommandCentre = () => {
                           {dayInfo.bookings.map(booking => {
                             const customer = getCustomerById(booking.customerId);
                             const color = getJobTypeColor(booking.type);
-                            const statusIcon = booking.status === 'scheduled' ? '❓' : booking.status === 'confirmed' ? '✓' : booking.status === 'completed' ? '✅' : booking.status === 'invoiced' ? '📧' : booking.status === 'paid' ? '💰' : '';
+                            const statusIcon = booking.status === 'scheduled' ? '❓' : booking.status === 'confirmed' ? '✓' : booking.status === 'in_progress' ? '▶' : booking.status === 'completed' ? '✅' : booking.status === 'invoiced' ? '📧' : booking.status === 'paid' ? '💰' : '';
                             
                             return (
                               <div key={booking.id} className={`flex justify-between items-start ${color === 'blue' ? 'text-blue-700' : color === 'orange' ? 'text-orange-700' : color === 'pink' ? 'text-pink-700' : 'text-gray-700'}`}>
@@ -1529,6 +1581,7 @@ const CommandCentre = () => {
                       <div className="font-bold text-lg flex items-center gap-2">
                         {isProvisional && <span className="text-gray-400">❓</span>}
                         {booking.status === 'confirmed' && <span className="text-blue-500">✓</span>}
+                        {booking.status === 'in_progress' && <span className="text-green-600">▶</span>}
                         {isProject ? booking.projectName : customer?.name}
                       </div>
                       <div className="text-sm text-gray-500 mt-1">{getJobTypeLabel(booking.type)}</div>
@@ -1565,6 +1618,8 @@ const CommandCentre = () => {
                       {booking.status === 'scheduled' && <button onClick={() => updateBookingStatus(booking.id, 'confirmed')} className="text-sm bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 touch-target">✓ Confirm</button>}
                       {booking.status === 'scheduled' && <button onClick={() => removeBooking(date, booking.id)} className="text-sm bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 touch-target">✗ Decline</button>}
                       {booking.status === 'confirmed' && <button onClick={() => updateBookingStatus(booking.id, 'completed')} className="text-sm bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 touch-target">✓ Done</button>}
+                      {booking.status === 'in_progress' && <span className="text-sm bg-green-100 text-green-800 px-4 py-2 rounded-lg">▶ On site now</span>}
+                      {booking.status === 'in_progress' && <button onClick={() => updateBookingStatus(booking.id, 'completed')} className="text-sm bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 touch-target">✓ Done</button>}
                       {booking.status === 'completed' && <button onClick={() => {
                         const customer = getCustomerById(booking.customerId);
                         const distance = customer?.distance || 0;
@@ -2083,7 +2138,7 @@ const CommandCentre = () => {
             {selectedCustomerToBook && (
               <div className={`border-2 rounded-lg p-4 mb-3 booking-highlight ${selectedTicketToBook ? 'bg-orange-100 border-orange-500' : selectedGroupToBook ? 'bg-blue-100 border-blue-500' : 'bg-green-100 border-green-500'}`}>
                 <div className={`font-bold text-lg ${selectedTicketToBook ? 'text-orange-800' : selectedGroupToBook ? 'text-blue-800' : 'text-green-800'}`}>
-                  {selectedTicketToBook ? '🔧 Booking Fault:' : selectedGroupToBook ? `🔗 Booking Group (${selectedGroupToBook.length}):` : '📍 Booking:'}
+                  {selectedTicketToBook ? ((selectedTicketToBook.type || 'fault') === 'fault' ? '🔧 Booking Fault:' : '📋 Booking from ticket:') : selectedGroupToBook ? `🔗 Booking Group (${selectedGroupToBook.length}):` : '📍 Booking:'}
                 </div>
                 {selectedGroupToBook ? (
                   <div className="space-y-1 mt-2">
