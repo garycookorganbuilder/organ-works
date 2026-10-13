@@ -1,9 +1,12 @@
 <!DOCTYPE html>
-<!-- Command Centre · 13 Oct 2026 (c) · weekday shown on every calendar day; typing fix; tickets shown at the visit and closable; distance warning; fuller delete warning; backup download -->
+<!-- Command Centre · 13 Oct 2026 (e) · opens on the week; day/week/month/year; Needs you list; Undo; calm view; one word for each thing -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Command Centre">
   <title>Command Centre — Organ Works</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -11,6 +14,8 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     * { touch-action: manipulation; }
+    /* On a tablet, text boxes smaller than 16px make the screen zoom in when tapped */
+    @media (max-width: 1450px) { input, select, textarea { font-size: 16px !important; } }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; }
     .focus-mode .dim-when-booking { opacity: 0.3; pointer-events: none; filter: grayscale(50%); }
     .booking-highlight { animation: pulse-green 1.5s ease-in-out infinite; }
@@ -55,7 +60,32 @@
       from { transform: translateY(20px); opacity: 0; }
       to { transform: translateY(0); opacity: 1; }
     }
+    @media (max-width: 1450px) { .saving-indicator { right: auto; left: 20px; } }
     .saving-indicator.error { background: #dc2626; }
+    /* Undo bar: appears for 10 seconds after a change */
+    .undo-bar {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1f2937;
+      color: white;
+      padding: 10px 10px 10px 18px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 16px;
+      font-weight: 500;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+      z-index: 9998;
+      max-width: calc(100vw - 32px);
+    }
+    .undo-bar button { min-height: 48px; padding: 0 18px; border-radius: 8px; font-weight: 700; font-size: 16px; }
+    .undo-bar .undo-btn { background: #fbbf24; color: #111827; }
+    .undo-bar .ok-btn { background: #374151; color: white; }
+    @media (max-width: 1450px) { .undo-bar { bottom: 72px; } }
+    .calm .booking-highlight { animation: none; }
     .saving-indicator.success { background: #16a34a; }
     .mini-spinner {
       width: 14px;
@@ -92,7 +122,7 @@ const apiCall = async (action, params = {}) => {
       url.searchParams.set(key, params[key]);
     }
   });
-  const response = await fetch(url.toString());
+  const response = await fetch(url.toString(), { keepalive: true });
   const data = await response.json();
   if (data && data.error === 'ACCESS_KEY_REQUIRED') {
     // The backend is locked and this device has no key (or the wrong one)
@@ -139,6 +169,34 @@ const CommandCentre = () => {
   const [isConfigured, setIsConfigured] = useState(!!getApiUrl());
   const [configUrl, setConfigUrl] = useState('');
   const [needsKey, setNeedsKey] = useState(false);
+
+  // Screen size: narrow = tablet (two tabs instead of side by side); compact = smaller calendar cells
+  const [isNarrow, setIsNarrow] = useState(window.innerWidth < 1450);
+  const [isCompact, setIsCompact] = useState(window.innerWidth < 1700);
+  const [plannerTab, setPlannerTab] = useState('calendar');   // 'calendar' | 'todo' (narrow screens only)
+  const [plannerView, setPlannerView] = useState('week');     // 'day' | 'week' | 'month' | 'year' - always opens on the week
+  const [showPastMonths, setShowPastMonths] = useState(null); // null = automatic (hidden on a tablet, shown on a wide screen)
+
+  // Block booking: first day + last day
+  const [blockMode, setBlockMode] = useState(null);           // null | 'job' | 'project' | 'off'
+  const [blockStart, setBlockStart] = useState(null);
+  const [blockEnd, setBlockEnd] = useState(null);
+  const [blockDays, setBlockDays] = useState('mw');           // 'mw' | 'mt' | 'mf'
+  const [blockReason, setBlockReason] = useState('');
+  const [showCompletedProjects, setShowCompletedProjects] = useState(false);
+
+  // Undo: after a change a bar offers Undo for 10 seconds
+  // Calm view: fewer colours, no movement. Remembered on this device.
+  const [calm, setCalm] = useState(() => { try { return localStorage.getItem('organWorks_calm') === '1'; } catch (e) { return false; } });
+  const toggleCalm = () => setCalm(prev => { const next = !prev; try { localStorage.setItem('organWorks_calm', next ? '1' : '0'); } catch (e) {} return next; });
+
+  const [undoInfo, setUndoInfo] = useState(null);             // { message, revert }
+  const undoTimerRef = useRef(null);
+  const undoCommitRef = useRef(null);                         // a delete that waits until the bar has gone
+  // In-page "are you sure" for the few things that cannot be undone
+  const [confirmDialog, setConfirmDialog] = useState(null);   // { message, confirmLabel, onConfirm }
+  const [loadError, setLoadError] = useState(null);
+  const [needsExpanded, setNeedsExpanded] = useState({});      // which groups of the Needs you list are showing everything
   const [keyInput, setKeyInput] = useState('');
   const [keyTried, setKeyTried] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -231,6 +289,7 @@ const CommandCentre = () => {
     return customers.filter(c => c.name.toLowerCase().includes(projectCustomerSearch.toLowerCase())).slice(0, 10);
   }, [customers, projectCustomerSearch]);
   const [newProjectEstDays, setNewProjectEstDays] = useState('');
+  const [newProjectNotes, setNewProjectNotes] = useState('');
   const [newProjectYearStart, setNewProjectYearStart] = useState(new Date().getFullYear());
   const [newProjectYearEnd, setNewProjectYearEnd] = useState(new Date().getFullYear());
   const [editingProject, setEditingProject] = useState(null);
@@ -242,12 +301,36 @@ const CommandCentre = () => {
   // OPTIMISTIC UPDATE HELPERS
   // ============================================================
   
+  const bgBusyRef = useRef(0);           // saves in flight right now
+  const pendingDeleteRef = useRef(new Set()); // ids removed on screen, not yet removed in the sheet
+  const tempIdMapRef = useRef({});       // temporary id -> the real id the sheet gave it (null = the save failed)
+  const pause = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  // Undo waits for the save it is undoing, so the two cannot overtake each other
+  const waitForSaves = async () => { for (let i = 0; i < 150 && bgBusyRef.current > 0; i++) await pause(200); };
+  // An item that was only just added still has a temporary id: note its real one when it arrives
+  const learnId = (tempId, realId) => {
+    tempIdMapRef.current[tempId] = realId || null;
+    if (realId && pendingDeleteRef.current.has(tempId)) pendingDeleteRef.current.add(realId);
+  };
+  const realIdFor = async (id) => {
+    if (!String(id).startsWith('temp_')) return id;
+    for (let i = 0; i < 150; i++) {
+      if (id in tempIdMapRef.current) return tempIdMapRef.current[id];
+      await pause(200);
+    }
+    return null;
+  };
+  // Lists fresh from the sheet must not bring back something that is waiting to be deleted
+  const dropPending = (list) => (list || []).filter(item => !pendingDeleteRef.current.has(item.id));
+
   const startBgSave = () => {
+    bgBusyRef.current += 1;
     setBgSaveCount(c => c + 1);
     setSaveError(null);
   };
   
   const endBgSave = (success, error = null) => {
+    bgBusyRef.current = Math.max(0, bgBusyRef.current - 1);
     setBgSaveCount(c => Math.max(0, c - 1));
     if (success) {
       setLastSaved(new Date());
@@ -279,6 +362,7 @@ const CommandCentre = () => {
   const loadData = useCallback(async () => {
     if (!getApiUrl()) return;
     setLoading(true);
+    setLoadError(null);
     try {
       const data = await apiCall('getAllData');
       const parsedCustomers = (data.customers || []).map(c => ({
@@ -291,12 +375,25 @@ const CommandCentre = () => {
         ...c,
         isBookingContact: c.isBookingContact === 'true' || c.isBookingContact === true
       }));
-      setContacts(parsedContacts);
+      setContacts(dropPending(parsedContacts));
       setProjects(data.projects || []);
       const normalizedBookings = (data.bookings || []).map(b => ({ ...b, date: b.date ? b.date.split('T')[0] : b.date }));
-      setBookings(normalizedBookings);
+      // Older versions could save a new big job's first days against a temporary id,
+      // so they were never counted on the job. Link them back by customer + job name.
+      const repairs = [];
+      const healedBookings = normalizedBookings.map(b => {
+        if (b.type !== 'project' || !String(b.projectId || '').startsWith('temp_')) return b;
+        const matches = (data.projects || []).filter(p => p.customerId === b.customerId && p.name === b.projectName);
+        if (matches.length !== 1) return b;
+        repairs.push({ id: b.id, projectId: matches[0].id });
+        return { ...b, projectId: matches[0].id };
+      });
+      setBookings(dropPending(healedBookings));
+      if (repairs.length > 0) {
+        (async () => { for (const r of repairs) { try { await apiCall('updateBooking', { data: r }); } catch (e) { break; } } })();
+      }
       setDaysOff(data.daysOff || []);
-      setTickets(data.tickets || []);
+      setTickets(dropPending(data.tickets));
       setPricing(data.pricing || { timeBands: [], distanceBands: [] });
       setMaterialsList(data.materialsList || []);
       setJobs(data.jobs || []);
@@ -304,13 +401,56 @@ const CommandCentre = () => {
       setMaterials(data.materials || []);
     } catch (err) {
       console.error('Failed to load data:', err);
-      if (!err.needKey) alert('Failed to load data: ' + err.message);
+      if (!err.needKey) setLoadError(err.message);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => { if (isConfigured) loadData(); }, [isConfigured, loadData]);
+
+  // Follow the screen size (rotating the tablet, resizing the window)
+  useEffect(() => {
+    const onResize = () => { setIsNarrow(window.innerWidth < 1450); setIsCompact(window.innerWidth < 1700); };
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    return () => { window.removeEventListener('resize', onResize); window.removeEventListener('orientationchange', onResize); };
+  }, []);
+
+  // On a tablet: as soon as there is something to place, show the calendar
+  useEffect(() => {
+    if (blockMode) setPlannerView(v => v === 'day' ? 'week' : v);
+    if (selectedCustomerToBook || allocatingProject || blockMode) {
+      setPlannerTab('calendar');
+      if (window.innerWidth < 1450) {
+        setTimeout(() => { const row = document.getElementById('this-month-row'); if (row) row.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 200);
+      }
+    }
+  }, [selectedCustomerToBook, allocatingProject, blockMode]);
+
+  // A block belongs to whatever started it: leaving that ends the block
+  useEffect(() => {
+    if ((blockMode === 'job' && !selectedCustomerToBook) || (blockMode === 'project' && !allocatingProject)) {
+      setBlockMode(null); setBlockStart(null); setBlockEnd(null);
+    }
+  }, [blockMode, selectedCustomerToBook, allocatingProject]);
+
+  // If the page is closed while the Undo bar is showing, carry out what was waiting
+  useEffect(() => {
+    const onHide = () => {
+      const commit = undoCommitRef.current;
+      if (!commit) return; // nothing waiting to be deleted
+      undoCommitRef.current = null;
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+      undoTimerRef.current = null;
+      setUndoInfo(null);
+      commit();
+    };
+    const onVisibility = () => { if (document.visibilityState === 'hidden') onHide(); };
+    window.addEventListener('pagehide', onHide);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => { window.removeEventListener('pagehide', onHide); document.removeEventListener('visibilitychange', onVisibility); };
+  }, []);
 
   // The backend asks for the access key
   useEffect(() => {
@@ -336,7 +476,7 @@ const CommandCentre = () => {
       link.remove();
       setTimeout(() => URL.revokeObjectURL(link.href), 10000);
     } catch (err) {
-      if (!err.needKey) alert('Backup failed: ' + err.message);
+      if (!err.needKey) { setSaveError('Backup failed: ' + err.message); setTimeout(() => setSaveError(null), 5000); }
     } finally {
       setBackupBusy(false);
     }
@@ -383,14 +523,14 @@ const CommandCentre = () => {
   const formatCurrency = (amount) => '£' + (parseFloat(amount) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const getJobTypeLabel = (type) => {
-    if (type === 'OTS') return 'On-site (with helper)';
-    if (type === 'TSC') return 'Solo Site Work';
+    if (type === 'OTS') return 'With helper';
+    if (type === 'TSC') return 'Solo';
     if (type === 'WS') return 'Workshop';
-    if (type === 'project') return 'Project Day';
-    if (type === 'tuning_full') return 'Tuning (Full Day)';
-    if (type === 'tuning_half') return 'Tuning (Half Day)';
-    if (type === 'fault') return 'Fault Visit';
-    if (type === 'big') return 'Big Job';
+    if (type === 'project') return 'Big job';
+    if (type === 'tuning_full') return 'Tuning (full day)';
+    if (type === 'tuning_half') return 'Tuning (half day)';
+    if (type === 'fault') return 'Fault visit';
+    if (type === 'big') return 'Big job';
     return type || 'Visit';
   };
 
@@ -585,8 +725,8 @@ const CommandCentre = () => {
           {c.faultDaysBooked > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-orange-400 rounded"></div><span>Faults booked: <strong>{c.faultDaysBooked}</strong></span></div>}
           {c.projectDaysBooked > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-pink-400 rounded"></div><span>Big jobs booked: <strong>{c.projectDaysBooked}</strong></span></div>}
           {c.otherDaysBooked > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-gray-400 rounded"></div><span>Other booked: <strong>{c.otherDaysBooked}</strong></span></div>}
-          <div className="flex items-center gap-2"><div className="w-4 h-4 bg-amber-200 border border-amber-300 rounded"></div><span>Tunings to fit in: <strong>{c.daysNeededForTunings}</strong></span></div>
-          {c.plannedProjectDays > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-pink-200 border border-pink-300 rounded"></div><span>Big job days to fit in: <strong>{c.plannedProjectDays}</strong></span></div>}
+          <div className="flex items-center gap-2"><div className="w-4 h-4 bg-amber-200 border border-amber-300 rounded"></div><span>Tunings to book: <strong>{c.daysNeededForTunings}</strong></span></div>
+          {c.plannedProjectDays > 0 && <div className="flex items-center gap-2"><div className="w-4 h-4 bg-pink-200 border border-pink-300 rounded"></div><span>Big job days to book: <strong>{c.plannedProjectDays}</strong></span></div>}
           <div className="flex items-center gap-2"><div className="w-4 h-4 bg-green-200 border border-green-300 rounded"></div><span>Free: <strong className={freeColour}>{c.daysFreeForProjects}</strong></span></div>
           {c.isOvercommitted && <div className="flex items-center gap-2 text-red-600 font-bold">⚠️ {c.overcommittedBy} days short at 3 a week — {stretchCovers ? 'Thursdays would cover it' : `Thursdays only cover ${c.stretchFree}`}</div>}
         </div>
@@ -598,7 +738,7 @@ const CommandCentre = () => {
             <div className="bg-gray-50 p-3 rounded"><div className="text-gray-500">Already booked</div><div className="text-2xl font-bold">{c.bookedPlanCount}</div><div className="text-xs text-gray-400">{c.tuningDaysBooked}T + {c.faultDaysBooked}F + {c.projectDaysBooked}P{c.otherDaysBooked > 0 ? ` + ${c.otherDaysBooked} other` : ''}</div></div>
             <div className="bg-gray-50 p-3 rounded"><div className="text-gray-500">Not yet booked</div><div className="text-2xl font-bold">{c.freePlanCount}</div><div className="text-xs text-gray-400">Mon–Wed days with nothing on</div></div>
             <div className="bg-amber-50 p-3 rounded"><div className="text-amber-600">Tunings to book</div><div className="text-2xl font-bold text-amber-700">{c.tuningsToBook}</div><div className="text-xs text-amber-500">= {c.daysNeededForTunings} days @ {TUNINGS_PER_DAY}/day{c.tuningsOverdue > 0 ? ` · ${c.tuningsOverdue} from earlier months not counted` : ''}</div></div>
-            <div className="bg-pink-50 p-3 rounded"><div className="text-pink-600">Big job days to fit in</div><div className="text-2xl font-bold text-pink-700">{c.plannedProjectDays}</div><div className="text-xs text-pink-500">estimate − days in the diary</div></div>
+            <div className="bg-pink-50 p-3 rounded"><div className="text-pink-600">Big job days to book</div><div className="text-2xl font-bold text-pink-700">{c.plannedProjectDays}</div><div className="text-xs text-pink-500">estimate − days in the diary</div></div>
             <div className={`p-3 rounded ${c.isOvercommitted ? 'bg-red-50' : 'bg-green-50'}`}><div className={c.isOvercommitted ? 'text-red-600' : 'text-green-600'}>{c.isOvercommitted ? 'Short at 3 days a week' : 'Free at 3 days a week'}</div><div className={`text-2xl font-bold ${c.isOvercommitted ? 'text-red-700' : 'text-green-700'}`}>{c.isOvercommitted ? c.overcommittedBy : c.daysFreeForProjects}</div><div className="text-xs text-gray-500">{c.freePlanCount} not booked − {c.daysNeededForTunings} tunings − {c.plannedProjectDays} big job</div></div>
             <div className="bg-gray-50 p-3 rounded"><div className="text-gray-500">Thursdays free</div><div className="text-2xl font-bold">{c.stretchFree}</div><div className="text-xs text-gray-400">4th day, only if needed</div></div>
           </div>
@@ -640,6 +780,59 @@ const CommandCentre = () => {
     });
   };
   const activeProjects = getActiveProjects();
+  const completedProjects = projects.filter(p => p.status === 'completed');
+
+  // ============================================================
+  // UNDO
+  // ============================================================
+
+  // The bar has gone without Undo being pressed: carry out anything that was waiting
+  const settleUndo = () => {
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    undoTimerRef.current = null;
+    const commit = undoCommitRef.current;
+    undoCommitRef.current = null;
+    setUndoInfo(null);
+    if (commit) commit();
+  };
+
+  // message: what just happened. revert: how to put it back.
+  // commit (optional): for deletes - only sent to the sheet once the bar has gone.
+  const offerUndo = (message, revert, commit = null) => {
+    settleUndo();
+    undoCommitRef.current = commit;
+    setUndoInfo({ message, revert });
+    undoTimerRef.current = setTimeout(settleUndo, 10000);
+  };
+
+  const doUndo = () => {
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    undoTimerRef.current = null;
+    undoCommitRef.current = null;
+    const info = undoInfo;
+    setUndoInfo(null);
+    if (info && info.revert) info.revert();
+  };
+
+  const askConfirm = (message, confirmLabel, onConfirm) => setConfirmDialog({ message, confirmLabel, onConfirm });
+
+  const STATUS_WORDS = { scheduled: 'Provisional', confirmed: 'Confirmed', in_progress: 'On site', completed: 'Done', invoiced: 'Invoiced', paid: 'Paid' };
+  const nameFor = (customerId) => (customers.find(c => c.id === customerId) || {}).name || 'Unknown';
+  const dayWords = (dateStr) => parseLocalDate(dateStr).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+
+  // Delete bookings quietly (used by Undo)
+  const deleteBookingsQuietly = async (ids, refreshTickets = false) => {
+    if (ids.length === 0) return;
+    startBgSave();
+    try {
+      for (const id of ids) await apiCall('deleteBooking', { bookingId: id });
+      if (refreshTickets) { const ticketData = await apiCall('getTickets'); setTickets(dropPending(ticketData)); }
+      endBgSave(true);
+    } catch (err) {
+      endBgSave(false, err.message);
+      loadData();
+    }
+  };
 
   // ============================================================
   // OPTIMISTIC BOOKING FUNCTIONS
@@ -661,53 +854,97 @@ const CommandCentre = () => {
     setJobNotes('');
     
     // Background save
-    startBgSave();
-    try {
-      const result = await apiCall('addBooking', { data: { date, customerId, type, serviceType: svcType, price: price || 0, status: 'scheduled', notes: notes || '' } });
-      setBookings(prev => prev.map(b => b.id === tempId ? { ...b, id: result.id } : b));
-      if (ticket) {
-        await apiCall('updateTicket', { data: { id: ticket.id, status: 'scheduled', bookingId: result.id } });
+    let savedId = null;
+    let undone = false;
+    const saving = (async () => {
+      startBgSave();
+      try {
+        const result = await apiCall('addBooking', { data: { date, customerId, type, serviceType: svcType, price: price || 0, status: 'scheduled', notes: notes || '' } });
+        savedId = result.id;
+        learnId(tempId, result.id);
+        setBookings(prev => prev.map(b => b.id === tempId ? { ...b, id: result.id } : b));
+        if (ticket) {
+          await apiCall('updateTicket', { data: { id: ticket.id, status: 'scheduled', bookingId: result.id } });
+        }
+        endBgSave(true);
+      } catch (err) {
+        learnId(tempId, null);
+        setBookings(prev => prev.filter(b => b.id !== tempId));
+        if (ticket && !undone) {
+          setTickets(prev => prev.some(t => t.id === ticket.id) ? prev : [...prev, ticket]);
+        }
+        endBgSave(false, err.message);
       }
-      endBgSave(true);
-    } catch (err) {
-      setBookings(prev => prev.filter(b => b.id !== tempId));
-      if (ticket) {
-        setTickets(prev => [...prev, ticket]);
+    })();
+
+    offerUndo(`Booked ${nameFor(customerId)} on ${dayWords(date)}`, async () => {
+      undone = true;
+      setBookings(prev => prev.filter(b => b.id !== tempId && b.id !== savedId));
+      if (ticket) setTickets(prev => prev.some(t => t.id === ticket.id) ? prev : [...prev, ticket]);
+      await saving;
+      if (savedId) {
+        setBookings(prev => prev.filter(b => b.id !== savedId));
+        await deleteBookingsQuietly([savedId], !!ticket);
       }
-      endBgSave(false, err.message);
-    }
+    });
+
+    await saving;
   };
 
   const removeBooking = async (date, bookingId) => {
-    if (!confirm('Remove this booking?')) return;
-    
     const bookingToRemove = bookings.find(b => b.id === bookingId);
+    if (!bookingToRemove) return;
     
-    // OPTIMISTIC
+    // OPTIMISTIC: it disappears now, but the sheet is only told once the Undo bar has gone
+    pendingDeleteRef.current.add(bookingId);
     setBookings(prev => prev.filter(b => b.id !== bookingId));
     
-    startBgSave();
-    try {
-      await apiCall('deleteBooking', { bookingId });
-      const ticketData = await apiCall('getTickets');
-      setTickets(ticketData || []);
-      endBgSave(true);
-    } catch (err) {
-      if (bookingToRemove) {
-        setBookings(prev => [...prev, bookingToRemove]);
-      }
-      endBgSave(false, err.message);
-    }
+    const title = bookingToRemove.type === 'project' ? (bookingToRemove.projectName || 'Big job') : nameFor(bookingToRemove.customerId);
+    offerUndo(`Removed ${title} from ${dayWords(bookingToRemove.date)}`,
+      () => {
+        const nowId = tempIdMapRef.current[bookingId] || bookingId; // it may have been given its real id meanwhile
+        pendingDeleteRef.current.delete(bookingId); pendingDeleteRef.current.delete(nowId);
+        setBookings(prev => prev.some(b => b.id === nowId || b.id === bookingId) ? prev : [...prev, { ...bookingToRemove, id: nowId }]);
+      },
+      async () => {
+        const realId = await realIdFor(bookingId); // waits if it was only just booked
+        if (!realId) return; // it never reached the sheet
+        startBgSave();
+        try {
+          await apiCall('deleteBooking', { bookingId: realId });
+          const ticketData = await apiCall('getTickets');
+          setTickets(dropPending(ticketData));
+          endBgSave(true);
+        } catch (err) {
+          pendingDeleteRef.current.delete(bookingId); pendingDeleteRef.current.delete(realId);
+          setBookings(prev => prev.some(b => b.id === realId) ? prev : [...prev, { ...bookingToRemove, id: realId }]);
+          endBgSave(false, err.message);
+        }
+      });
   };
 
   const updateBookingStatus = async (bookingId, status) => {
     const originalBooking = bookings.find(b => b.id === bookingId);
     const updates = { status };
-    if (status === 'invoiced') updates.invoiceDate = new Date().toISOString().split('T')[0];
-    if (status === 'paid') updates.paidDate = new Date().toISOString().split('T')[0];
+    if (status === 'invoiced') updates.invoiceDate = todayStrNow();
+    if (status === 'paid') updates.paidDate = todayStrNow();
     
     // OPTIMISTIC
     setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, ...updates } : b));
+    
+    if (originalBooking) {
+      offerUndo(`${nameFor(originalBooking.customerId)}, ${dayWords(originalBooking.date)}: ${STATUS_WORDS[status] || status}`, async () => {
+        setBookings(prev => prev.map(b => b.id === bookingId ? originalBooking : b));
+        await waitForSaves();
+        startBgSave();
+        try {
+          await apiCall('updateBooking', { data: { id: bookingId, status: originalBooking.status, invoiceDate: originalBooking.invoiceDate || '', paidDate: originalBooking.paidDate || '' } });
+          endBgSave(true);
+        } catch (err) {
+          endBgSave(false, err.message);
+        }
+      });
+    }
     
     startBgSave();
     try {
@@ -724,6 +961,25 @@ const CommandCentre = () => {
   const toggleDayOff = async (date, reason = '') => {
     const wasOff = isDayOff(date);
     const existingDayOff = daysOff.find(d => d.date === date);
+    
+    offerUndo(wasOff ? `${dayWords(date)} is no longer a day off` : `${dayWords(date)} marked as a day off`, async () => {
+      const restored = existingDayOff || { date, reason: '' };
+      if (wasOff) setDaysOff(prev => prev.some(d => d.date === date) ? prev : [...prev, restored]);
+      else setDaysOff(prev => prev.filter(d => d.date !== date));
+      await waitForSaves();
+      startBgSave();
+      try {
+        if (wasOff) {
+          await apiCall('addDayOff', { data: { date, reason: restored.reason || '' } });
+        } else {
+          await apiCall('removeDayOff', { date });
+        }
+        endBgSave(true);
+      } catch (err) {
+        endBgSave(false, err.message);
+        loadData();
+      }
+    });
     
     // OPTIMISTIC
     if (wasOff) {
@@ -748,6 +1004,31 @@ const CommandCentre = () => {
       }
       endBgSave(false, err.message);
     }
+  };
+
+  // Open the invoice calculator for a finished visit
+  const openInvoiceCalc = (booking) => {
+    const customer = getCustomerById(booking.customerId);
+    const distance = customer?.distance || 0;
+    const actualHours = parseFloat(booking.actualHours) || 0;
+    const suggestedBand = Math.max(4, Math.ceil(actualHours || 4));
+    setSelectedBand(suggestedBand);
+    let existingMaterials = [];
+    if (booking.materials) {
+      try { existingMaterials = JSON.parse(booking.materials); } catch (e) { existingMaterials = []; }
+    }
+    setInvoiceMaterials(existingMaterials);
+    setNewMaterialDesc('');
+    setNewMaterialCost('');
+    setMaterialSearch('');
+    setMaterialQty(1);
+    setNewMaterialQty(1);
+    setSelectedMaterial(null);
+    // A customer's custom rate applies to tunings only (not faults, not work booked from a ticket)
+    const isTuningVisit = (booking.type === 'OTS' || booking.type === 'TSC' || (booking.type || '').startsWith('tuning')) && !tickets.some(t => t.bookingId === booking.id);
+    setCustomAmount(isTuningVisit && customer?.customRate ? String(customer.customRate) : '');
+    setSelectedDistance(null);
+    setShowInvoiceCalc({ ...booking, distance, actualHours });
   };
 
   // Debounced day off reason update
@@ -775,7 +1056,7 @@ const CommandCentre = () => {
     const yearStart = newProjectYearStart;
     const yearEnd = newProjectYearEnd >= newProjectYearStart ? newProjectYearEnd : newProjectYearStart;
     const tempId = generateTempId();
-    const newProject = { id: tempId, name: newProjectName, customerId: newProjectCustomer.id, customerName: newProjectCustomer.name, estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : null, yearStart, yearEnd, status: 'active', days: [] };
+    const newProject = { id: tempId, name: newProjectName, customerId: newProjectCustomer.id, customerName: newProjectCustomer.name, estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : null, notes: newProjectNotes.trim(), yearStart, yearEnd, status: 'active', days: [] };
     
     // OPTIMISTIC
     setProjects(prev => [...prev, newProject]);
@@ -787,22 +1068,20 @@ const CommandCentre = () => {
     setNewProjectCustomer(null);
     setProjectCustomerSearch('');
     setNewProjectEstDays('');
+    setNewProjectNotes('');
     setNewProjectYearStart(currentYear);
     setNewProjectYearEnd(currentYear);
     
     startBgSave();
     try {
-      const result = await apiCall('addProject', { data: { customerId: newProjectCustomer.id, name: newProjectName, estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : '', yearStart, yearEnd, status: 'active' } });
+      const result = await apiCall('addProject', { data: { customerId: newProjectCustomer.id, name: newProjectName, estimatedDays: newProjectEstDays ? parseInt(newProjectEstDays) : '', notes: newProjectNotes.trim(), yearStart, yearEnd, status: 'active' } });
       setProjects(prev => prev.map(p => p.id === tempId ? { ...p, id: result.id } : p));
-      if (allocatingProject?.id === tempId) {
-        setAllocatingProject(prev => prev ? { ...prev, id: result.id } : null);
-      }
+      // (must look at the latest value, not the one from when Create was pressed)
+      setAllocatingProject(prev => prev && prev.id === tempId ? { ...prev, id: result.id } : prev);
       endBgSave(true);
     } catch (err) {
       setProjects(prev => prev.filter(p => p.id !== tempId));
-      if (allocatingProject?.id === tempId) {
-        setAllocatingProject(null);
-      }
+      setAllocatingProject(prev => prev && prev.id === tempId ? null : prev);
       endBgSave(false, err.message);
     }
   };
@@ -827,9 +1106,13 @@ const CommandCentre = () => {
     }
   };
 
-  const deleteProject = async (projectId) => {
-    if (!confirm('Delete this project? All allocated days will also be removed.')) return;
-    
+  const deleteProject = (projectId) => {
+    const project = projects.find(p => p.id === projectId);
+    const dayCount = bookings.filter(b => b.projectId === projectId).length;
+    askConfirm(`Delete the big job "${project ? project.name : ''}"?\n\n${dayCount > 0 ? `Its ${dayCount} booked day${dayCount === 1 ? '' : 's'} will be removed from the diary too. ` : ''}This cannot be undone.\n\nIf the job is finished, use "Mark complete" instead.`, 'Delete big job', () => reallyDeleteProject(projectId));
+  };
+
+  const reallyDeleteProject = async (projectId) => {
     const projectToDelete = projects.find(p => p.id === projectId);
     const projectBookingsToDelete = bookings.filter(b => b.projectId === projectId);
     
@@ -883,17 +1166,159 @@ const CommandCentre = () => {
       startBgSave();
       try {
         const result = await apiCall('addBooking', { data: { date: dateStr, customerId: allocatingProject.customerId, type: 'project', serviceType: 'project', projectId: allocatingProject.id, projectName: allocatingProject.name, price: 0, status: 'scheduled', notes: allocatingProject.estimatedDays ? `Est: ${allocatingProject.estimatedDays} days` : allocatingProject.name } });
+        learnId(tempId, result.id);
         setBookings(prev => prev.map(b => b.id === tempId ? { ...b, id: result.id } : b));
         endBgSave(true);
       } catch (err) {
+        learnId(tempId, null);
         setBookings(prev => prev.filter(b => b.id !== tempId));
         endBgSave(false, err.message);
       }
     }
   };
 
+  // ============================================================
+  // BLOCK BOOKING (first day + last day)
+  // Used for days off, smaller jobs and big jobs.
+  // ============================================================
+
+  const BLOCK_DAY_SETS = { mw: [1, 2, 3], mt: [1, 2, 3, 4], mf: [1, 2, 3, 4, 5] };
+  const BLOCK_DAY_LABELS = { mw: 'Mon–Wed', mt: 'Mon–Thu', mf: 'Mon–Fri' };
+  const BLOCK_MAX_DAYS = 150;
+
+  const startBlock = (mode) => {
+    setBlockMode(mode);
+    setBlockStart(null);
+    setBlockEnd(null);
+    setBlockDays(mode === 'off' ? 'mf' : 'mw');
+    setBlockReason('');
+    setSelectedDay(null);
+  };
+
+  const clearBlock = () => { setBlockMode(null); setBlockStart(null); setBlockEnd(null); setBlockReason(''); };
+
+  const formatDayLong = (dateStr) => parseLocalDate(dateStr).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+
+  // Work out exactly which days the block would cover
+  const getBlockPlan = () => {
+    if (!blockMode || !blockStart || !blockEnd) return null;
+    const allowed = BLOCK_DAY_SETS[blockDays];
+    const dates = [], alreadyBooked = [], daysOffSkipped = [];
+    const d = parseLocalDate(blockStart);
+    const end = parseLocalDate(blockEnd);
+    let guard = 0;
+    while (d <= end && guard < 800) {
+      guard++;
+      const ds = getDateString(d.getFullYear(), d.getMonth(), d.getDate());
+      if (allowed.includes(d.getDay())) {
+        if (isDayOff(ds)) { if (blockMode !== 'off') daysOffSkipped.push(ds); }
+        else if (getBookingsForDay(ds).length > 0) alreadyBooked.push(ds);
+        else dates.push(ds);
+      }
+      d.setDate(d.getDate() + 1);
+    }
+    return { dates, alreadyBooked, daysOffSkipped, tooMany: dates.length > BLOCK_MAX_DAYS };
+  };
+  const blockPlan = getBlockPlan();
+  const blockDateSet = new Set(blockPlan ? blockPlan.dates : (blockMode && blockStart ? [blockStart] : []));
+
+  const confirmBlock = async () => {
+    const plan = getBlockPlan();
+    if (!plan || plan.dates.length === 0 || plan.tooMany) return;
+    const dates = plan.dates;
+
+    // ---- days off ----
+    if (blockMode === 'off') {
+      const reason = blockReason.trim();
+      setDaysOff(prev => [...prev, ...dates.map(date => ({ date, reason }))]);
+      clearBlock();
+      startBgSave();
+      try {
+        try {
+          await apiCall('addDaysOffBatch', { data: { dates, reason } });
+        } catch (err) {
+          if (!/Unknown action/.test(err.message)) throw err;
+          for (const date of dates) await apiCall('addDayOff', { data: { date, reason } }); // older backend: one at a time
+        }
+        endBgSave(true);
+        offerUndo(`Marked ${dates.length} day${dates.length === 1 ? '' : 's'} off`, async () => {
+          setDaysOff(prev => prev.filter(d => !dates.includes(d.date)));
+          startBgSave();
+          try {
+            for (const date of dates) await apiCall('removeDayOff', { date });
+            endBgSave(true);
+          } catch (err) {
+            endBgSave(false, err.message);
+            loadData();
+          }
+        });
+      } catch (err) {
+        endBgSave(false, err.message);
+        loadData(); // show exactly what was saved
+      }
+      return;
+    }
+
+    // ---- jobs and big jobs ----
+    const isProjectBlock = blockMode === 'project';
+    const base = isProjectBlock
+      ? { customerId: allocatingProject.customerId, type: 'project', serviceType: 'project', projectId: allocatingProject.id, projectName: allocatingProject.name, price: 0, status: 'scheduled' }
+      : { customerId: selectedCustomerToBook.id, type: bookingType, serviceType: bookingType, price: 0, status: 'scheduled' };
+    const baseNote = isProjectBlock
+      ? (allocatingProject.estimatedDays ? `Est: ${allocatingProject.estimatedDays} days` : allocatingProject.name)
+      : (jobNotes || '');
+    const numberDays = !isProjectBlock && dates.length > 1;
+    const noteFor = (i) => [baseNote, numberDays ? `(day ${i + 1} of ${dates.length})` : ''].filter(Boolean).join(' ');
+    const temp = dates.map((date, i) => ({ ...base, id: generateTempId(), date, notes: noteFor(i) }));
+
+    // OPTIMISTIC
+    setBookings(prev => [...prev, ...temp]);
+    clearBlock();
+    if (!isProjectBlock) { setSelectedCustomerToBook(null); setCustomQuote(''); setJobNotes(''); }
+
+    startBgSave();
+    try {
+      let ids;
+      try {
+        const result = await apiCall('addBookingsBatch', { data: { ...base, notes: baseNote, numberDays, dates } });
+        ids = result.ids || [];
+      } catch (err) {
+        if (!/Unknown action/.test(err.message)) throw err;
+        ids = []; // older backend: one at a time
+        for (const t of temp) {
+          const r = await apiCall('addBooking', { data: { ...base, date: t.date, notes: t.notes } });
+          ids.push(r.id);
+        }
+      }
+      temp.forEach((t, idx) => learnId(t.id, ids[idx] || null));
+      setBookings(prev => prev.map(b => { const idx = temp.findIndex(t => t.id === b.id); return idx >= 0 && ids[idx] ? { ...b, id: ids[idx] } : b; }));
+      endBgSave(true);
+      const blockTitle = isProjectBlock ? base.projectName : nameFor(base.customerId);
+      offerUndo(`Booked ${dates.length} day${dates.length === 1 ? '' : 's'} for ${blockTitle}`, async () => {
+        const saved = ids.filter(Boolean);
+        setBookings(prev => prev.filter(b => !saved.includes(b.id)));
+        await deleteBookingsQuietly(saved);
+      });
+    } catch (err) {
+      endBgSave(false, err.message);
+      loadData(); // show exactly what was saved
+    }
+  };
+
   const handleDayClick = async (dateStr, year, month, day) => {
     if (!isWorkDay(year, month, day)) return;
+    
+    // A brand-new big job must finish saving before days can be placed on it,
+    // otherwise the days would not be linked to it
+    if (allocatingProject && String(allocatingProject.id).startsWith('temp_')) return;
+    
+    // Block booking: first tap = first day, second tap = last day
+    if (blockMode) {
+      if (!blockStart || blockEnd) { setBlockStart(dateStr); setBlockEnd(null); }
+      else if (dateStr < blockStart) { setBlockEnd(blockStart); setBlockStart(dateStr); }
+      else setBlockEnd(dateStr);
+      return;
+    }
     
     if (isDayOff(dateStr)) {
       if (!selectedCustomerToBook && !allocatingProject) {
@@ -928,15 +1353,22 @@ const CommandCentre = () => {
         setJobNotes('');
         setCustomQuote('');
         
+        const savedGroupIds = [];
         startBgSave();
         try {
           for (let i = 0; i < tempBookings.length; i++) {
             const item = groupToSave[i];
             const svcType = isFault ? bookingType : type;
             const result = await apiCall('addBooking', { data: { date: dateStr, customerId: item.customer.id, type, serviceType: svcType, price: price || 0, status: 'scheduled', notes: jobNotes || '' } });
+            learnId(tempBookings[i].id, result.id);
             setBookings(prev => prev.map(b => b.id === tempBookings[i].id ? { ...b, id: result.id } : b));
+            savedGroupIds.push(result.id);
           }
           endBgSave(true);
+          offerUndo(`Booked ${savedGroupIds.length} churches on ${dayWords(dateStr)}`, async () => {
+            setBookings(prev => prev.filter(b => !savedGroupIds.includes(b.id)));
+            await deleteBookingsQuietly(savedGroupIds);
+          });
         } catch (err) {
           setBookings(prev => prev.filter(b => !tempBookings.some(tb => tb.id === b.id)));
           endBgSave(false, err.message);
@@ -987,9 +1419,11 @@ const CommandCentre = () => {
         dueType: isNextVisit ? 'next-visit' : 'month',
         status: 'new' 
       } });
+      learnId(tempId, result.id);
       setTickets(prev => prev.map(t => t.id === tempId ? { ...t, id: result.id } : t));
       endBgSave(true);
     } catch (err) {
+      learnId(tempId, null);
       setTickets(prev => prev.filter(t => t.id !== tempId));
       endBgSave(false, err.message);
     }
@@ -1014,6 +1448,18 @@ const CommandCentre = () => {
     setTickets(prev => prev.map(t => t.id === ticketId ? { ...t, status: 'closed' } : t));
     if (selectedTicketToBook?.id === ticketId) { setSelectedTicketToBook(null); setSelectedCustomerToBook(null); setJobNotes(''); }
     
+    offerUndo(`Ticket done: ${nameFor(original.customerId)}`, async () => {
+      setTickets(prev => prev.map(t => t.id === ticketId ? original : t));
+      await waitForSaves();
+      startBgSave();
+      try {
+        await apiCall('updateTicket', { data: { id: ticketId, status: original.status || 'new' } });
+        endBgSave(true);
+      } catch (err) {
+        endBgSave(false, err.message);
+      }
+    });
+    
     startBgSave();
     try {
       await apiCall('updateTicket', { data: { id: ticketId, status: 'closed' } });
@@ -1026,21 +1472,32 @@ const CommandCentre = () => {
 
   const deleteTicket = async (ticketId) => {
     const ticketToDelete = tickets.find(t => t.id === ticketId);
+    if (!ticketToDelete) return;
     
-    // OPTIMISTIC
+    // OPTIMISTIC: it disappears now, but the sheet is only told once the Undo bar has gone
+    pendingDeleteRef.current.add(ticketId);
     setTickets(prev => prev.filter(t => t.id !== ticketId));
     setEditingTicket(null);
     
-    startBgSave();
-    try {
-      await apiCall('deleteTicket', { ticketId });
-      endBgSave(true);
-    } catch (err) {
-      if (ticketToDelete) {
-        setTickets(prev => [...prev, ticketToDelete]);
-      }
-      endBgSave(false, err.message);
-    }
+    offerUndo(`Ticket deleted: ${nameFor(ticketToDelete.customerId)}`,
+      () => {
+        const nowId = tempIdMapRef.current[ticketId] || ticketId;
+        pendingDeleteRef.current.delete(ticketId); pendingDeleteRef.current.delete(nowId);
+        setTickets(prev => prev.some(t => t.id === nowId || t.id === ticketId) ? prev : [...prev, { ...ticketToDelete, id: nowId }]);
+      },
+      async () => {
+        const realId = await realIdFor(ticketId);
+        if (!realId) return; // it never reached the sheet
+        startBgSave();
+        try {
+          await apiCall('deleteTicket', { ticketId: realId });
+          endBgSave(true);
+        } catch (err) {
+          pendingDeleteRef.current.delete(ticketId); pendingDeleteRef.current.delete(realId);
+          setTickets(prev => prev.some(t => t.id === realId) ? prev : [...prev, { ...ticketToDelete, id: realId }]);
+          endBgSave(false, err.message);
+        }
+      });
   };
 
   const updateTicket = async (ticket) => {
@@ -1165,7 +1622,12 @@ const CommandCentre = () => {
     }
     message += '\n\nThis cannot be undone.';
     
-    if (!confirm(message)) return;
+    askConfirm(message, 'Delete customer', () => reallyDeleteCustomer(customerId));
+  };
+
+  const reallyDeleteCustomer = async (customerId) => {
+    const customer = customers.find(c => c.id === customerId);
+    const customerContacts = contacts.filter(c => c.customerId === customerId);
     
     // OPTIMISTIC
     setCustomers(prev => prev.filter(c => c.id !== customerId));
@@ -1228,9 +1690,11 @@ const CommandCentre = () => {
           isBookingContact: newContactIsBooking
         })
       });
+      learnId(tempId, result.id);
       setContacts(prev => prev.map(c => c.id === tempId ? { ...c, id: result.id } : c));
       endBgSave(true);
     } catch (err) {
+      learnId(tempId, null);
       setContacts(prev => prev.filter(c => c.id !== tempId));
       endBgSave(false, err.message);
     }
@@ -1256,23 +1720,33 @@ const CommandCentre = () => {
   };
 
   const deleteContact = async (contactId) => {
-    if (!confirm('Delete this contact?')) return;
-    
     const contactToDelete = contacts.find(c => c.id === contactId);
+    if (!contactToDelete) return;
     
-    // OPTIMISTIC
+    // OPTIMISTIC: it disappears now, but the sheet is only told once the Undo bar has gone
+    pendingDeleteRef.current.add(contactId);
     setContacts(prev => prev.filter(c => c.id !== contactId));
+    setEditingContact(null);
     
-    startBgSave();
-    try {
-      await apiCall('deleteContact', { contactId });
-      endBgSave(true);
-    } catch (err) {
-      if (contactToDelete) {
-        setContacts(prev => [...prev, contactToDelete]);
-      }
-      endBgSave(false, err.message);
-    }
+    offerUndo(`Contact deleted: ${contactToDelete.name}`,
+      () => {
+        const nowId = tempIdMapRef.current[contactId] || contactId;
+        pendingDeleteRef.current.delete(contactId); pendingDeleteRef.current.delete(nowId);
+        setContacts(prev => prev.some(c => c.id === nowId || c.id === contactId) ? prev : [...prev, { ...contactToDelete, id: nowId }]);
+      },
+      async () => {
+        const realId = await realIdFor(contactId);
+        if (!realId) return; // it never reached the sheet
+        startBgSave();
+        try {
+          await apiCall('deleteContact', { contactId: realId });
+          endBgSave(true);
+        } catch (err) {
+          pendingDeleteRef.current.delete(contactId); pendingDeleteRef.current.delete(realId);
+          setContacts(prev => prev.some(c => c.id === realId) ? prev : [...prev, { ...contactToDelete, id: realId }]);
+          endBgSave(false, err.message);
+        }
+      });
   };
 
   const getStats = () => {
@@ -1366,6 +1840,172 @@ const CommandCentre = () => {
   }
 
   // ============================================================
+  // MOVING AROUND: DAY / WEEK / MONTH / YEAR
+  // currentDate is the day in focus. The arrows move it by one day,
+  // week, month or year depending on the view.
+  // ============================================================
+
+  const dateToStr = (d) => getDateString(d.getFullYear(), d.getMonth(), d.getDate());
+  const todayStrNow = () => dateToStr(new Date());
+  const focusStr = dateToStr(currentDate);
+
+  const startOfWeek = (d) => {
+    const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); // back to Monday
+    return x;
+  };
+
+  // The Monday of the week on show (at a weekend, the week that is about to start)
+  const weekMonday = () => {
+    const base = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate());
+    if (base.getDay() === 6) base.setDate(base.getDate() + 2);
+    if (base.getDay() === 0) base.setDate(base.getDate() + 1);
+    return startOfWeek(base);
+  };
+
+  const shiftFocus = (dir) => {
+    const d = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate());
+    if (plannerView === 'day') { do { d.setDate(d.getDate() + dir); } while (d.getDay() === 0 || d.getDay() === 6); }
+    else if (plannerView === 'week') d.setDate(d.getDate() + 7 * dir);
+    else if (plannerView === 'month') { d.setDate(1); d.setMonth(d.getMonth() + dir); }
+    else { d.setMonth(0, 1); d.setFullYear(d.getFullYear() + dir); }
+    setCurrentDate(d);
+  };
+
+  const plannerTitle = (() => {
+    if (plannerView === 'day') return currentDate.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    if (plannerView === 'week') {
+      const mon = weekMonday();
+      const fri = new Date(mon); fri.setDate(mon.getDate() + 4);
+      const sameMonth = mon.getMonth() === fri.getMonth();
+      return `${mon.getDate()}${sameMonth ? '' : ' ' + monthNames[mon.getMonth()].slice(0, 3)} – ${fri.getDate()} ${monthNames[fri.getMonth()]} ${fri.getFullYear()}`;
+    }
+    if (plannerView === 'month') return `${monthNames[currentDate.getMonth()]} ${currentDate.getFullYear()}`;
+    return String(currentYear);
+  })();
+
+  // One booking, as a small card (week view) or a one-line chip (month view)
+  const bookingTone = (b) => {
+    if (calm) return { solid: 'bg-white border-gray-500', dashed: 'bg-white border-gray-500', chip: 'bg-gray-200 text-gray-900' };
+    const color = getJobTypeColor(b.type);
+    if (color === 'blue') return { solid: 'bg-blue-50 border-blue-500', dashed: 'bg-blue-50 border-blue-400', chip: 'bg-blue-500 text-white' };
+    if (color === 'orange') return { solid: 'bg-orange-50 border-orange-500', dashed: 'bg-orange-50 border-orange-400', chip: 'bg-orange-400 text-white' };
+    if (color === 'pink') return { solid: 'bg-pink-50 border-pink-500', dashed: 'bg-pink-50 border-pink-400', chip: 'bg-pink-400 text-white' };
+    if (color === 'purple') return { solid: 'bg-purple-50 border-purple-500', dashed: 'bg-purple-50 border-purple-400', chip: 'bg-purple-500 text-white' };
+    return { solid: 'bg-gray-50 border-gray-500', dashed: 'bg-gray-50 border-gray-400', chip: 'bg-gray-500 text-white' };
+  };
+  const bookingTitle = (b) => b.type === 'project' ? (b.projectName || 'Big job') : nameFor(b.customerId);
+
+  const renderBookingCard = (b) => {
+    const isProject = b.type === 'project';
+    const provisional = b.status === 'scheduled' && !isProject;
+    const tone = bookingTone(b);
+    const open = isProject ? [] : getOpenTickets(b.customerId);
+    return (
+      <div key={b.id} className={`rounded-lg p-2 ${provisional ? `border-2 border-dashed ${tone.dashed}` : `border-l-4 ${tone.solid}`}`}>
+        <div className="font-bold leading-tight">{bookingTitle(b)}</div>
+        {isProject && <div className="text-sm text-gray-600">{nameFor(b.customerId)}</div>}
+        <div className="text-sm text-gray-600">{getJobTypeLabel(b.type)}{!isProject ? ` · ${STATUS_WORDS[b.status] || b.status}` : ''}</div>
+        {b.notes && !isProject && <div className="text-sm italic">{b.notes}</div>}
+        {open.length > 0 && <div className="text-sm text-orange-700 font-medium">📋 {open.length} ticket{open.length === 1 ? '' : 's'} while there</div>}
+      </div>
+    );
+  };
+
+  // ============================================================
+  // WEEK VIEW (the opening screen): Monday to Friday, one column each
+  // ============================================================
+
+  const WeekView = stable('WeekView', () => {
+    const todayS = todayStrNow();
+    const monday = weekMonday();
+    const days = [0, 1, 2, 3, 4].map(i => { const d = new Date(monday); d.setDate(monday.getDate() + i); return d; });
+    const isSelecting = !!(selectedCustomerToBook || allocatingProject || blockMode);
+    
+    return (
+      <div className={`grid grid-cols-5 gap-2 ${selectedCustomerToBook ? 'focus-mode' : ''}`}>
+        {days.map(d => {
+          const ds = dateToStr(d);
+          const dow = d.getDay();
+          const off = isDayOff(ds);
+          const list = getBookingsForDay(ds);
+          const isToday = ds === todayS;
+          const isPast = ds < todayS;
+          const kind = dow === STRETCH_DAY ? '4th day' : dow === ADMIN_DAY ? 'Admin day' : '';
+          return (
+            <div key={ds} data-date={ds} onClick={() => handleDayClick(ds, d.getFullYear(), d.getMonth(), d.getDate())}
+              className={`relative rounded-lg shadow p-3 flex flex-col gap-2 cursor-pointer ${isNarrow ? 'min-h-[340px]' : 'min-h-[460px]'} ${isPast ? 'bg-gray-50' : 'bg-white'} ${off ? 'dim-when-booking' : ''}`}>
+              {isToday && <div className="absolute inset-0 border-4 border-red-500 rounded-lg pointer-events-none"></div>}
+              {blockDateSet.has(ds) && <div className="absolute inset-0 border-4 border-green-600 rounded-lg pointer-events-none"></div>}
+              <div className="flex justify-between items-baseline gap-1">
+                <div><span className="text-xl font-bold">{dayNames[dow].slice(0, 3)}</span> <span className="text-lg text-gray-600">{d.getDate()} {monthNames[d.getMonth()].slice(0, 3)}</span></div>
+                {isToday ? <span className="text-sm font-bold text-red-600">Today</span> : kind && <span className="text-sm text-gray-500">{kind}</span>}
+              </div>
+              {off && <div className={`p-3 rounded-lg font-medium ${calm ? 'bg-gray-200 text-gray-800' : 'bg-yellow-100 text-yellow-900'}`}>Day off{getDayOffReason(ds) ? ` — ${getDayOffReason(ds)}` : ''}</div>}
+              {!off && list.map(renderBookingCard)}
+              {!off && list.length === 0 && !isSelecting && <div className="text-gray-400 py-2">Nothing booked</div>}
+              {!off && isSelecting && <div className="mt-auto p-3 rounded-lg border-2 border-dashed border-green-500 text-green-700 font-bold text-center">👆 Tap to {blockMode ? 'choose' : 'book'} this day</div>}
+            </div>
+          );
+        })}
+      </div>
+    );
+  });
+
+  // ============================================================
+  // MONTH VIEW: Monday to Friday across, weeks down, names in the boxes
+  // ============================================================
+
+  const MonthView = stable('MonthView', () => {
+    const todayS = todayStrNow();
+    const y = currentDate.getFullYear(), m = currentDate.getMonth();
+    const first = new Date(y, m, 1);
+    const last = new Date(y, m + 1, 0);
+    const weeks = [];
+    const cursor = startOfWeek(first);
+    while (cursor <= last) {
+      const row = [0, 1, 2, 3, 4].map(i => { const d = new Date(cursor); d.setDate(cursor.getDate() + i); return d; });
+      if (row.some(d => d.getMonth() === m)) weeks.push(row);
+      cursor.setDate(cursor.getDate() + 7);
+    }
+    
+    return (
+      <div className={`bg-white rounded-lg shadow p-3 ${selectedCustomerToBook ? 'focus-mode' : ''}`}>
+        <div className="grid grid-cols-5 gap-2 mb-2 text-sm font-bold text-gray-600">
+          {['Mon', 'Tue', 'Wed', 'Thu · 4th day', 'Fri · Admin'].map(label => <div key={label} className="px-2">{label}</div>)}
+        </div>
+        <div className="grid grid-cols-5 gap-2">
+          {weeks.flat().map(d => {
+            const ds = dateToStr(d);
+            const inMonth = d.getMonth() === m;
+            const off = isDayOff(ds);
+            const list = getBookingsForDay(ds);
+            const isToday = ds === todayS;
+            return (
+              <div key={ds} data-date={ds} onClick={() => handleDayClick(ds, d.getFullYear(), d.getMonth(), d.getDate())}
+                className={`relative rounded-lg border p-2 cursor-pointer ${isNarrow ? 'min-h-[92px]' : 'min-h-[112px]'} ${off ? (calm ? 'bg-gray-200' : 'bg-yellow-100') + ' dim-when-booking' : inMonth ? 'bg-white' : 'bg-gray-50'}`}>
+                {isToday && <div className="absolute inset-0 border-4 border-red-500 rounded-lg pointer-events-none"></div>}
+                {blockDateSet.has(ds) && <div className="absolute inset-0 border-4 border-green-600 rounded-lg pointer-events-none"></div>}
+                <div className={`font-bold ${inMonth ? '' : 'text-gray-400'}`}>{d.getDate()}{inMonth ? '' : ' ' + monthNames[d.getMonth()].slice(0, 3)}</div>
+                {off && <div className="text-sm">Day off{getDayOffReason(ds) ? ` — ${getDayOffReason(ds)}` : ''}</div>}
+                {!off && list.slice(0, 3).map(b => {
+                  const provisional = b.status === 'scheduled' && b.type !== 'project';
+                  const tone = bookingTone(b);
+                  return <div key={b.id} className={`text-sm truncate rounded px-2 py-1 mt-1 ${provisional ? `border-2 border-dashed ${tone.dashed}` : tone.chip}`}>{provisional ? '? ' : ''}{bookingTitle(b)}</div>;
+                })}
+                {!off && list.length > 3 && <div className="text-sm text-gray-600 mt-1">+{list.length - 3} more</div>}
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-3 flex justify-end no-print">
+          <button onClick={() => setZoomedMonth({ month: m, year: y })} className="px-4 py-3 bg-gray-200 rounded-lg font-medium touch-target">🖨️ Print this month</button>
+        </div>
+      </div>
+    );
+  });
+
+  // ============================================================
   // YEAR VIEW WITH CAPACITY COLORING
   // ============================================================
   
@@ -1373,19 +2013,30 @@ const CommandCentre = () => {
     const today = new Date();
     const todayStr = getDateString(today.getFullYear(), today.getMonth(), today.getDate());
     
+    // Months that are over can be folded away so the months still to come fit on the screen
+    const viewingThisYear = currentYear === today.getFullYear();
+    const pastMonthCount = viewingThisYear ? Math.max(0, today.getMonth() - 1) : 0; // keep last month visible
+    const pastShown = showPastMonths === null ? !isNarrow : showPastMonths;
+    const firstMonthShown = pastShown ? 0 : pastMonthCount;
+    
     return (
       <div className={`bg-white rounded-lg shadow overflow-auto ${selectedCustomerToBook ? 'focus-mode' : ''}`}>
+        {pastMonthCount > 0 && (
+          <button onClick={() => setShowPastMonths(!pastShown)} className="w-full py-3 text-sm font-medium text-gray-600 bg-gray-100 border-b no-print touch-target">
+            {pastShown ? '▲ Hide the months that are over' : `▼ Show ${monthNames[0]} to ${monthNames[pastMonthCount - 1]}`}
+          </button>
+        )}
         <table className="w-full border-collapse">
           <thead className="sticky top-0 bg-gray-800 text-white z-10">
             <tr>
-              <th className="p-3 text-left text-lg w-32">{currentYear}</th>
+              <th className={isCompact ? "p-1 text-left text-sm sticky left-0 bg-gray-800 z-20" : "p-3 text-left text-lg w-32"}>{currentYear}</th>
               {[...Array(31)].map((_, i) => <th key={i} className="p-1 text-center text-sm font-medium">{i + 1}</th>)}
             </tr>
           </thead>
           <tbody>
-            {plannerMonths.map((monthData, monthIdx) => (
-              <tr key={monthIdx} className="border-b">
-                <td onClick={() => setZoomedMonth({ month: monthData.month, year: monthData.year })} className="p-3 font-bold border-r bg-gray-50 text-lg cursor-pointer hover:bg-blue-100 hover:text-blue-700 transition-colors" title="Click to zoom">{monthData.name}</td>
+            {plannerMonths.filter((_, monthIdx) => monthIdx >= firstMonthShown).map((monthData) => (
+              <tr key={monthData.month} id={monthData.month === today.getMonth() && monthData.year === today.getFullYear() ? 'this-month-row' : undefined} className="border-b">
+                <td onClick={() => { setCurrentDate(new Date(monthData.year, monthData.month, 1)); setPlannerView('month'); }} className={`font-bold border-r bg-gray-50 cursor-pointer underline hover:bg-blue-100 hover:text-blue-700 transition-colors ${isCompact ? 'p-1 text-sm sticky left-0 z-[5]' : 'p-3 text-lg'}`}>{isCompact ? monthData.name.slice(0, 3) : monthData.name}</td>
                 {[...Array(31)].map((_, dayIdx) => {
                   const day = dayIdx + 1;
                   if (day > monthData.days) return <td key={dayIdx} className="bg-gray-200"></td>;
@@ -1398,7 +2049,8 @@ const CommandCentre = () => {
                   const firstBookingStatus = hasBooking ? dayBookings[0].status : null;
                   const isProvisional = firstBookingStatus === 'scheduled' && firstBookingType !== 'project';
                   const color = firstBookingType ? getJobTypeColor(firstBookingType) : null;
-                  const isSelecting = selectedCustomerToBook !== null || allocatingProject !== null;
+                  const isSelecting = selectedCustomerToBook !== null || allocatingProject !== null || blockMode !== null;
+                  const inBlock = blockDateSet.has(dateStr);
                   const isToday = dateStr === todayStr;
                   const isPast = dateStr < todayStr;
                   
@@ -1428,13 +2080,24 @@ const CommandCentre = () => {
                   else if (isFreeForProjects) cellClass += isSelecting ? 'bg-green-300 hover:bg-green-400' : 'bg-green-200 hover:bg-green-300';
                   else if (isStretchFree) cellClass += isSelecting ? 'bg-green-100 hover:bg-green-200' : 'bg-green-50 hover:bg-green-100';
                   else cellClass += 'bg-white hover:bg-gray-100';
+                  
+                  // Calm view: booked, provisional, day off, free - nothing else
+                  if (calm) {
+                    cellClass = 'text-center border transition-all cursor-pointer relative ';
+                    if (!isWork) cellClass += 'bg-gray-100 dim-when-booking';
+                    else if (isOff) cellClass += 'bg-gray-300 dim-when-booking';
+                    else if (hasBooking && isProvisional) cellClass += 'bg-white text-gray-800 border-2 border-dashed border-gray-500';
+                    else if (hasBooking) cellClass += 'bg-gray-700 text-white';
+                    else cellClass += 'bg-white';
+                  }
 
                   return (
-                    <td key={dayIdx} onClick={() => handleDayClick(dateStr, monthData.year, monthData.month, day)} className={cellClass}>
+                    <td key={dayIdx} data-date={dateStr} onClick={() => handleDayClick(dateStr, monthData.year, monthData.month, day)} className={cellClass}>
+                      {inBlock && <div className="absolute inset-0 border-4 border-green-600 rounded pointer-events-none"></div>}
                       {isToday && <div className="absolute inset-0 border-2 border-red-500 rounded pointer-events-none"></div>}
-                      <div className={`text-[11px] leading-none pt-1 font-medium ${!isWork ? 'text-gray-400' : hasBooking && !isProvisional ? 'text-white' : 'text-gray-500'}`}>{DAY_SHORT[dow]}</div>
-                      <div className="w-8 h-8 flex items-center justify-center mx-auto text-sm font-bold">
-                        {hasBooking ? (isProvisional ? '?' : dayBookings.length > 1 ? dayBookings.length : firstBookingType === 'project' ? 'P' : (firstBookingType === 'OTS' || firstBookingType === 'TSC' || firstBookingType?.startsWith('tuning')) ? '✓' : firstBookingType === 'fault' ? 'F' : '✓') : isWork && !isOff && !isPast && !isAdminDay ? '·' : ''}
+                      <div className={`${isCompact ? 'text-[10px]' : 'text-[11px]'} leading-none pt-1 font-medium whitespace-nowrap ${!isWork ? 'text-gray-400' : hasBooking && !isProvisional ? 'text-white' : 'text-gray-500'}`}>{DAY_SHORT[dow]} {day}</div>
+                      <div className={`${isCompact ? 'w-7 h-7' : 'w-8 h-8'} flex items-center justify-center mx-auto text-sm font-bold`}>
+                        {hasBooking ? (isProvisional ? '?' : dayBookings.length > 1 ? dayBookings.length : firstBookingType === 'project' ? 'B' : (firstBookingType === 'OTS' || firstBookingType === 'TSC' || firstBookingType?.startsWith('tuning')) ? '✓' : firstBookingType === 'fault' ? 'F' : '✓') : isWork && !isOff && !isPast && !isAdminDay ? '·' : ''}
                       </div>
                     </td>
                   );
@@ -1443,18 +2106,29 @@ const CommandCentre = () => {
             ))}
           </tbody>
         </table>
-        <div className="flex gap-4 p-4 bg-gray-100 border-t text-sm flex-wrap">
-          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-blue-200 rounded border-2 border-dashed border-blue-400 flex items-center justify-center text-xs">?</div> Provisional</div>
-          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-blue-500 rounded flex items-center justify-center text-white text-xs">✓</div> Confirmed</div>
-          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-orange-400 rounded"></div> Fault</div>
-          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-pink-400 rounded"></div> Project</div>
-          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-amber-200 rounded border border-amber-400"></div> Reserved</div>
-          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-green-200 rounded border border-green-400"></div> Free</div>
-          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-green-50 rounded border border-green-300"></div> 4th day (Thu)</div>
-          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-white rounded border border-gray-300"></div> Admin (Fri)</div>
-          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-yellow-200 rounded"></div> Day off</div>
-          <div className="flex items-center gap-2"><div className="w-6 h-6 bg-white rounded border-2 border-red-500"></div> Today</div>
-        </div>
+        {calm ? (
+          <div className="flex gap-4 p-4 bg-gray-100 border-t text-sm flex-wrap">
+            <div className="flex items-center gap-2"><div className="w-6 h-6 bg-gray-700 rounded flex items-center justify-center text-white text-xs">✓</div> Booked</div>
+            <div className="flex items-center gap-2"><div className="w-6 h-6 bg-white rounded border-2 border-dashed border-gray-500 flex items-center justify-center text-xs">?</div> Provisional</div>
+            <div className="flex items-center gap-2"><div className="w-6 h-6 bg-gray-300 rounded"></div> Day off</div>
+            <div className="flex items-center gap-2"><div className="w-6 h-6 bg-white rounded border-2 border-red-500"></div> Today</div>
+            <div className="text-gray-600">F = fault · B = big job · a number = more than one visit</div>
+          </div>
+        ) : (
+          <div className="flex gap-4 p-4 bg-gray-100 border-t text-sm flex-wrap">
+            <div className="flex items-center gap-2"><div className="w-6 h-6 bg-blue-200 rounded border-2 border-dashed border-blue-400 flex items-center justify-center text-xs">?</div> Provisional</div>
+            <div className="flex items-center gap-2"><div className="w-6 h-6 bg-blue-500 rounded flex items-center justify-center text-white text-xs">✓</div> Confirmed</div>
+            <div className="flex items-center gap-2"><div className="w-6 h-6 bg-orange-400 rounded flex items-center justify-center text-white text-xs">F</div> Fault</div>
+            <div className="flex items-center gap-2"><div className="w-6 h-6 bg-pink-400 rounded flex items-center justify-center text-white text-xs">B</div> Big job</div>
+            <div className="flex items-center gap-2"><div className="w-6 h-6 bg-amber-200 rounded border border-amber-400"></div> Needed for tunings</div>
+            <div className="flex items-center gap-2"><div className="w-6 h-6 bg-pink-200 rounded border border-pink-300"></div> Needed for big jobs</div>
+            <div className="flex items-center gap-2"><div className="w-6 h-6 bg-green-200 rounded border border-green-400"></div> Free</div>
+            <div className="flex items-center gap-2"><div className="w-6 h-6 bg-green-50 rounded border border-green-300"></div> 4th day (Thu)</div>
+            <div className="flex items-center gap-2"><div className="w-6 h-6 bg-white rounded border border-gray-300"></div> Admin (Fri)</div>
+            <div className="flex items-center gap-2"><div className="w-6 h-6 bg-yellow-200 rounded"></div> Day off</div>
+            <div className="flex items-center gap-2"><div className="w-6 h-6 bg-white rounded border-2 border-red-500"></div> Today</div>
+          </div>
+        )}
       </div>
     );
   });
@@ -1587,7 +2261,7 @@ const CommandCentre = () => {
                   <div className="text-2xl font-bold text-pink-700">
                     {daysData.reduce((sum, d) => sum + d.bookings.filter(b => b.type === 'project').length, 0)}
                   </div>
-                  <div className="text-sm text-pink-600">Project Days</div>
+                  <div className="text-sm text-pink-600">Big job days</div>
                 </div>
                 <div className="bg-green-50 p-3 rounded">
                   <div className="text-2xl font-bold text-green-700">
@@ -1607,7 +2281,7 @@ const CommandCentre = () => {
   // DAY PANEL
   // ============================================================
   
-  const DayPanel = stable('DayPanel', ({ date, onClose }) => {
+  const DayPanel = stable('DayPanel', ({ date, onClose, embedded }) => {
     const [year, month, day] = date.split('-').map(Number);
     const d = new Date(year, month - 1, day);
     const dayBookings = getBookingsForDay(date);
@@ -1615,18 +2289,22 @@ const CommandCentre = () => {
     const [localReason, setLocalReason] = useState(getDayOffReason(date));
 
     return (
-      <div className="w-96 bg-white rounded-lg shadow-xl p-5 flex flex-col max-h-[calc(100vh-160px)]">
+      <div className={embedded ? "contents" : isNarrow ? "fixed inset-0 bg-black bg-opacity-40 z-40 flex justify-end" : "contents"} onClick={!embedded && isNarrow ? onClose : undefined}>
+      <div onClick={(e) => e.stopPropagation()} className={embedded ? "day-view bg-white rounded-lg shadow p-5 flex flex-col w-full max-w-3xl" : isNarrow ? "w-full max-w-md h-full bg-white shadow-xl p-5 flex flex-col" : "w-96 flex-shrink-0 bg-white rounded-lg shadow-xl p-5 flex flex-col max-h-[calc(100vh-160px)]"}>
+        {embedded && (selectedCustomerToBook || allocatingProject) && !isOff && isWorkDay(year, month - 1, day) && (
+          <button onClick={() => handleDayClick(date, year, month - 1, day)} className="w-full mb-4 py-4 rounded-lg border-2 border-dashed border-green-500 text-green-700 text-lg font-bold touch-target flex-shrink-0">👆 Book {allocatingProject ? allocatingProject.name : selectedCustomerToBook.name} on this day</button>
+        )}
         <div className="flex justify-between items-start mb-4 flex-shrink-0">
           <div>
             <h2 className="text-2xl font-bold">{dayNames[d.getDay()]}</h2>
             <p className="text-lg text-gray-500">{d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-3xl p-2 touch-target">✕</button>
+          {!embedded && <button onClick={onClose} className="px-4 py-3 bg-gray-200 rounded-lg font-medium touch-target">✕ Close</button>}
         </div>
 
         <label className="flex items-center gap-3 mb-2 p-4 bg-yellow-50 rounded-lg cursor-pointer touch-target flex-shrink-0">
           <input type="checkbox" checked={isOff} onChange={() => toggleDayOff(date)} className="w-6 h-6" />
-          <span className="text-lg font-medium">Day off / Holiday</span>
+          <span className="text-lg font-medium">Day off</span>
         </label>
         
         {isOff && (
@@ -1665,12 +2343,13 @@ const CommandCentre = () => {
                         {booking.status === 'in_progress' && <span className="text-green-600">▶</span>}
                         {isProject ? booking.projectName : customer?.name}
                       </div>
-                      <div className="text-sm text-gray-500 mt-1">{getJobTypeLabel(booking.type)}</div>
+                      <div className="text-sm text-gray-500 mt-1">{getJobTypeLabel(booking.type)}{!isProject ? ` · ${STATUS_WORDS[booking.status] || booking.status}` : ''}</div>
                       {booking.notes && !isProject && <div className="text-sm italic mt-1">{booking.notes}</div>}
+                      {isProject && projects.find(p => p.id === booking.projectId)?.notes && <div className="text-sm italic mt-1">📝 {projects.find(p => p.id === booking.projectId).notes}</div>}
                     </div>
                     <div className="text-right">
                       {!isProject && <div className="font-bold text-lg">£{booking.price}</div>}
-                      <button onClick={() => removeBooking(date, booking.id)} className="text-red-500 text-sm hover:text-red-700 mt-2">Remove</button>
+                      <button onClick={() => removeBooking(date, booking.id)} className="text-red-700 text-sm bg-white border border-red-300 px-3 py-2 rounded-lg mt-2 touch-target">Remove</button>
                     </div>
                   </div>
                   
@@ -1713,27 +2392,7 @@ const CommandCentre = () => {
                       {booking.status === 'confirmed' && <button onClick={() => updateBookingStatus(booking.id, 'completed')} className="text-sm bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 touch-target">✓ Done</button>}
                       {booking.status === 'in_progress' && <span className="text-sm bg-green-100 text-green-800 px-4 py-2 rounded-lg">▶ On site now</span>}
                       {booking.status === 'in_progress' && <button onClick={() => updateBookingStatus(booking.id, 'completed')} className="text-sm bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 touch-target">✓ Done</button>}
-                      {booking.status === 'completed' && <button onClick={() => {
-                        const customer = getCustomerById(booking.customerId);
-                        const distance = customer?.distance || 0;
-                        const actualHours = parseFloat(booking.actualHours) || 0;
-                        const suggestedBand = Math.max(4, Math.ceil(actualHours || 4));
-                        setSelectedBand(suggestedBand);
-                        let existingMaterials = [];
-                        if (booking.materials) {
-                          try { existingMaterials = JSON.parse(booking.materials); } catch (e) { existingMaterials = []; }
-                        }
-                        setInvoiceMaterials(existingMaterials);
-                        setNewMaterialDesc('');
-                        setNewMaterialCost('');
-                        setMaterialSearch('');
-                        setMaterialQty(1);
-                        setNewMaterialQty(1);
-                        setSelectedMaterial(null);
-                        setCustomAmount('');
-                        setSelectedDistance(null);
-                        setShowInvoiceCalc({ ...booking, distance, actualHours });
-                      }} className="text-sm bg-amber-200 px-4 py-2 rounded-lg hover:bg-amber-300 touch-target">📧 Invoice</button>}
+                      {booking.status === 'completed' && <button onClick={() => openInvoiceCalc(booking)} className="text-sm bg-amber-200 px-4 py-2 rounded-lg hover:bg-amber-300 touch-target">📧 Invoice</button>}
                       {booking.status === 'invoiced' && <button onClick={() => updateBookingStatus(booking.id, 'paid')} className="text-sm bg-green-200 px-4 py-2 rounded-lg hover:bg-green-300 touch-target">💷 Paid</button>}
                       {booking.status === 'paid' && <span className="text-sm bg-green-500 text-white px-4 py-2 rounded-lg">✓ Paid</span>}
                     </div>
@@ -1741,10 +2400,11 @@ const CommandCentre = () => {
                 </div>
               );
             })}
-            {dayBookings.length === 0 && <p className="text-gray-400 italic text-lg py-4">No bookings</p>}
+            {dayBookings.length === 0 && <p className="text-gray-400 italic text-lg py-4">Nothing booked</p>}
           </div>
         )}
-        <button onClick={onClose} className="w-full bg-gray-200 py-4 rounded-lg text-lg font-medium hover:bg-gray-300 touch-target flex-shrink-0">Close</button>
+        {!embedded && <button onClick={onClose} className="w-full bg-gray-200 py-4 rounded-lg text-lg font-medium hover:bg-gray-300 touch-target flex-shrink-0">Close</button>}
+      </div>
       </div>
     );
   });
@@ -1788,13 +2448,28 @@ const CommandCentre = () => {
         price: total,
         status: 'invoiced',
         materials: JSON.stringify(invoiceMaterials),
-        invoiceDate: new Date().toISOString().split('T')[0]
+        invoiceDate: todayStrNow()
       };
       
       // OPTIMISTIC
       setBookings(prev => prev.map(b => b.id === showInvoiceCalc.id ? { ...b, ...updates } : b));
       setShowInvoiceCalc(null);
       setSelectedBand(null);
+      
+      if (originalBooking) {
+        const invoicedId = showInvoiceCalc.id;
+        offerUndo(`Invoiced ${nameFor(originalBooking.customerId)}: ${formatCurrency(total)}`, async () => {
+          setBookings(prev => prev.map(b => b.id === invoicedId ? originalBooking : b));
+          await waitForSaves();
+          startBgSave();
+          try {
+            await apiCall('updateBooking', { data: JSON.stringify({ id: invoicedId, price: originalBooking.price || 0, status: originalBooking.status, materials: originalBooking.materials || '', invoiceDate: originalBooking.invoiceDate || '' }) });
+            endBgSave(true);
+          } catch (err) {
+            endBgSave(false, err.message);
+          }
+        });
+      }
       
       startBgSave();
       try {
@@ -1817,6 +2492,14 @@ const CommandCentre = () => {
             <div className="font-bold text-lg">{customer?.name || 'Unknown'}</div>
             <div className="text-blue-700">Actual time: {showInvoiceCalc.actualHours ? `${Math.floor(showInvoiceCalc.actualHours)}h ${Math.round((showInvoiceCalc.actualHours % 1) * 60)}m` : 'Not recorded'}</div>
             <div className="text-sm text-gray-500">Service: {getJobTypeLabel(serviceType)}</div>
+            {customer?.customRate && (
+              <div className="mt-2 text-sm font-medium text-green-700">
+                Custom tuning rate: {formatCurrency(customer.customRate)}
+                {parseFloat(customAmount) === customer.customRate
+                  ? ' — applied. Tap a time band to use standard rates instead.'
+                  : <button onClick={() => setCustomAmount(String(customer.customRate))} className="ml-2 px-3 py-2 bg-green-100 border border-green-400 rounded-lg">Use it</button>}
+              </div>
+            )}
           </div>
           
           <div className="mb-4">
@@ -1873,7 +2556,7 @@ const CommandCentre = () => {
                       <span className="text-sm">{mat.description} {qty > 1 ? `×${qty}` : ''}</span>
                       <div className="flex items-center gap-2">
                         <span className="font-medium">£{lineTotal}</span>
-                        <button onClick={() => setInvoiceMaterials(invoiceMaterials.filter((_, i) => i !== idx))} className="text-red-500 hover:text-red-700">✕</button>
+                        <button onClick={() => setInvoiceMaterials(invoiceMaterials.filter((_, i) => i !== idx))} className="text-red-700 text-sm bg-white border border-red-300 px-3 py-2 rounded-lg">Remove</button>
                       </div>
                     </div>
                   );
@@ -1914,6 +2597,7 @@ const CommandCentre = () => {
     const [isEditing, setIsEditing] = useState(false);
     const [editName, setEditName] = useState(project.name || '');
     const [editEstDays, setEditEstDays] = useState(project.estimatedDays || '');
+    const [editNotes, setEditNotes] = useState(project.notes || '');
     const [editYearStart, setEditYearStart] = useState(project.yearStart || project.targetYear || currentYear);
     const [editYearEnd, setEditYearEnd] = useState(project.yearEnd || project.targetYear || currentYear);
     
@@ -1926,6 +2610,7 @@ const CommandCentre = () => {
       updateProject(project.id, {
         name: editName,
         estimatedDays: editEstDays ? parseInt(editEstDays) : null,
+        notes: editNotes.trim(),
         yearStart: editYearStart,
         yearEnd: editYearEnd >= editYearStart ? editYearEnd : editYearStart
       });
@@ -1943,8 +2628,10 @@ const CommandCentre = () => {
                 <h2 className="text-2xl font-bold">{project.name}</h2>
               )}
               {yearLabel && !isEditing && <div className="text-sm text-purple-600 mt-1">📅 {yearLabel}</div>}
+              {project.notes && !isEditing && <div className="mt-2 p-3 bg-yellow-50 border border-yellow-300 rounded-lg whitespace-pre-line">📝 {project.notes}</div>}
+              {!project.notes && !isEditing && <button onClick={() => setIsEditing(true)} className="mt-2 text-sm text-purple-600 underline py-2">+ Add a note</button>}
             </div>
-            <button onClick={onClose} className="text-2xl text-gray-400 hover:text-gray-600 ml-4">×</button>
+            <button onClick={onClose} className="px-4 py-3 bg-gray-200 rounded-lg font-medium touch-target ml-4">✕ Close</button>
           </div>
           
           {isEditing && (
@@ -1967,6 +2654,10 @@ const CommandCentre = () => {
                   </div>
                 </div>
               </div>
+              <div className="mt-4">
+                <label className="text-sm text-gray-600 block mb-1">Notes</label>
+                <textarea value={editNotes} onChange={(e) => setEditNotes(e.target.value)} className="w-full p-2 border rounded" rows="3" placeholder="e.g. 1 day to cover, 1 day to uncover" />
+              </div>
               <div className="flex gap-2 mt-4">
                 <button onClick={handleSave} className="flex-1 py-2 bg-purple-500 text-white rounded font-medium">💾 Save Changes</button>
                 <button onClick={() => setIsEditing(false)} className="flex-1 py-2 bg-gray-200 rounded font-medium">Cancel</button>
@@ -1977,7 +2668,7 @@ const CommandCentre = () => {
           <div className="grid grid-cols-3 gap-4 mb-6">
             <div className="bg-purple-100 rounded-lg p-4 text-center">
               <div className="text-3xl font-bold text-purple-700">{project.days.length}</div>
-              <div className="text-sm text-purple-600">Days Allocated</div>
+              <div className="text-sm text-purple-600">Days booked</div>
               {project.estimatedDays && <div className="text-xs text-purple-500">of {project.estimatedDays} est.</div>}
             </div>
             <div className="bg-blue-100 rounded-lg p-4 text-center">
@@ -1991,8 +2682,9 @@ const CommandCentre = () => {
           </div>
           
           <div className="flex gap-3 pt-4 border-t flex-wrap">
-            <button onClick={() => { setAllocatingProject(project); onClose(); }} className="flex-1 py-3 bg-purple-500 text-white rounded-lg font-medium">📅 Allocate Days</button>
+            <button onClick={() => { setAllocatingProject(project); onClose(); }} className="flex-1 py-3 bg-purple-500 text-white rounded-lg font-medium">📅 Place days</button>
             {!isEditing && <button onClick={() => setIsEditing(true)} className="px-6 py-3 bg-purple-100 text-purple-600 rounded-lg font-medium hover:bg-purple-200">✏️ Edit</button>}
+            <button onClick={() => { updateProject(project.id, { status: 'completed' }); offerUndo(`Marked complete: ${project.name}`, () => updateProject(project.id, { status: 'active' })); }} className="px-6 py-3 bg-green-100 text-green-700 rounded-lg font-medium hover:bg-green-200">✓ Mark complete</button>
             <button onClick={() => deleteProject(project.id)} className="px-6 py-3 bg-red-100 text-red-600 rounded-lg font-medium hover:bg-red-200">🗑️ Delete</button>
             <button onClick={onClose} className="px-6 py-3 bg-gray-200 rounded-lg font-medium">Close</button>
           </div>
@@ -2184,56 +2876,44 @@ const CommandCentre = () => {
   });
 
   // ============================================================
-  // MAIN RENDER
+  // "WHAT AM I PLACING" BOXES
+  // Shown in the side list on a wide screen, above the calendar on a tablet.
   // ============================================================
-  
-  return (
-    <div className="min-h-screen bg-gray-100 p-3 flex flex-col">
-      {/* Header */}
-      <div className="bg-white rounded-lg shadow-lg p-4 mb-3 no-print">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <h1 className="text-3xl font-bold">🎹 COMMAND CENTRE</h1>
-          
-          {view === 'planner' && (
-            <div className="relative">
-              <input type="text" placeholder="🔍 Search customer..." value={plannerSearch} onChange={(e) => setPlannerSearch(e.target.value)} className="w-64 px-4 py-2 border-2 rounded-lg" />
-              {plannerSearch.length > 0 && (
-                <div className="absolute top-full left-0 right-0 bg-white border-2 rounded-b-lg shadow-lg max-h-64 overflow-y-auto z-50">
-                  {customers.filter(c => c.name.toLowerCase().includes(plannerSearch.toLowerCase())).slice(0, 10).map(c => (
-                    <div key={c.id} onMouseDown={(e) => e.preventDefault()} onClick={() => { setSelectedCustomerToBook(c); setBookingType('OTS'); setPlannerSearch(''); }} className="p-3 hover:bg-blue-50 cursor-pointer border-b">
-                      <div className="font-medium">{c.name}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          
-          <div className="flex gap-2">
-            <button onClick={() => { setView('planner'); setSelectedDay(null); setSelectedCustomer(null); }} className={`px-5 py-3 rounded-lg text-lg font-bold touch-target ${view === 'planner' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>📅 Planner</button>
-            <button onClick={() => { setView('customers'); setSelectedCustomer(null); }} className={`px-5 py-3 rounded-lg text-lg font-bold touch-target ${view.includes('customer') ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>👥 Customers</button>
-            <button onClick={() => setView('reports')} className={`px-5 py-3 rounded-lg text-lg font-bold touch-target ${view === 'reports' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>📊 Reports</button>
-          </div>
 
-          {view === 'planner' && (
-            <div className="flex gap-2">
-              <button onClick={() => setCurrentDate(new Date(currentYear - 1, 0, 1))} className="px-4 py-3 rounded-lg text-lg font-medium bg-gray-200 touch-target">← {currentYear - 1}</button>
-              <button onClick={() => setCurrentDate(new Date())} className="px-4 py-3 rounded-lg text-lg font-medium bg-gray-800 text-white touch-target">{currentYear}</button>
-              <button onClick={() => setCurrentDate(new Date(currentYear + 1, 0, 1))} className="px-4 py-3 rounded-lg text-lg font-medium bg-gray-200 touch-target">{currentYear + 1} →</button>
-            </div>
-          )}
-
-          <button onClick={loadData} className="px-4 py-3 rounded-lg bg-gray-600 text-white text-lg touch-target" title="Refresh">🔄</button>
-        </div>
+  const blockControls = blockMode && (
+    <div className="mt-3 p-3 bg-white rounded-lg border-2 border-gray-300 text-gray-800">
+      <div className="text-sm font-bold mb-2">Which days of the week?</div>
+      <div className="grid grid-cols-3 gap-2">
+        {['mw', 'mt', 'mf'].map(k => (
+          <button key={k} onClick={() => setBlockDays(k)} className={`py-3 rounded-lg text-sm font-medium touch-target ${blockDays === k ? 'bg-gray-800 text-white' : 'bg-gray-200'}`}>{BLOCK_DAY_LABELS[k]}</button>
+        ))}
       </div>
+      {!blockStart && <div className="text-lg mt-3 font-bold text-center p-3 rounded-lg bg-green-200 text-green-800">👆 Tap the FIRST day</div>}
+      {blockStart && !blockEnd && (
+        <div className="text-lg mt-3 font-bold text-center p-3 rounded-lg bg-green-200 text-green-800">
+          First day: {formatDayLong(blockStart)}<br/>👆 Now tap the LAST day
+        </div>
+      )}
+      {blockPlan && (
+        <div className="mt-3">
+          <div className="font-bold">{formatDayLong(blockStart)} → {formatDayLong(blockEnd)}</div>
+          <div className="text-2xl font-bold mt-1">{blockPlan.dates.length} day{blockPlan.dates.length === 1 ? '' : 's'}</div>
+          {blockPlan.alreadyBooked.length > 0 && <div className="text-sm text-orange-700 mt-1">{blockPlan.alreadyBooked.length} day{blockPlan.alreadyBooked.length === 1 ? ' already has' : 's already have'} something booked and will be left alone.</div>}
+          {blockPlan.daysOffSkipped.length > 0 && <div className="text-sm text-gray-600 mt-1">{blockPlan.daysOffSkipped.length} day{blockPlan.daysOffSkipped.length === 1 ? '' : 's'} off skipped.</div>}
+          {blockPlan.tooMany && <div className="text-sm text-red-700 mt-1 font-bold">That is more than {BLOCK_MAX_DAYS} days. Choose a shorter block.</div>}
+          <button onClick={confirmBlock} disabled={blockPlan.dates.length === 0 || blockPlan.tooMany} className="w-full mt-3 py-3 bg-green-600 text-white rounded-lg text-lg font-bold touch-target disabled:opacity-50">
+            ✓ {blockMode === 'off' ? 'Mark' : 'Book'} {blockPlan.dates.length} day{blockPlan.dates.length === 1 ? '' : 's'}{blockMode === 'off' ? ' off' : ''}
+          </button>
+          <button onClick={() => { setBlockStart(null); setBlockEnd(null); }} className="w-full mt-2 py-3 bg-gray-200 rounded-lg font-medium touch-target">Choose different days</button>
+        </div>
+      )}
+    </div>
+  );
 
-      {/* Main Content */}
-      {view === 'planner' && (
-        <div className="flex gap-3 flex-1 min-h-0">
-          {/* LEFT PANEL */}
-          <div className="w-80 bg-white rounded-lg shadow-xl p-4 no-print overflow-y-auto scroll-panel" style={{maxHeight: 'calc(100vh - 160px)'}}>
-            {selectedCustomerToBook && (
+  const bookingBox = selectedCustomerToBook && (
               <div className={`border-2 rounded-lg p-4 mb-3 booking-highlight ${selectedTicketToBook ? 'bg-orange-100 border-orange-500' : selectedGroupToBook ? 'bg-blue-100 border-blue-500' : 'bg-green-100 border-green-500'}`}>
+                <div className={isNarrow ? 'grid grid-cols-2 gap-4 items-start' : ''}>
+                <div>
                 <div className={`font-bold text-lg ${selectedTicketToBook ? 'text-orange-800' : selectedGroupToBook ? 'text-blue-800' : 'text-green-800'}`}>
                   {selectedTicketToBook ? ((selectedTicketToBook.type || 'fault') === 'fault' ? '🔧 Booking Fault:' : '📋 Booking from ticket:') : selectedGroupToBook ? `🔗 Booking Group (${selectedGroupToBook.length}):` : '📍 Booking:'}
                 </div>
@@ -2255,9 +2935,10 @@ const CommandCentre = () => {
                     ))}
                   </div>
                 )}
-                
+                </div>
+                <div>
                 <div className="grid grid-cols-3 gap-2 mt-3">
-                  {[{ type: 'OTS', label: 'OTS', desc: 'With helper' }, { type: 'TSC', label: 'Solo', desc: 'Just me' }, { type: 'WS', label: 'Workshop', desc: 'No travel' }].map(item => (
+                  {[{ type: 'OTS', label: 'With helper', desc: 'OTS' }, { type: 'TSC', label: 'Solo', desc: 'TSC' }, { type: 'WS', label: 'Workshop', desc: 'WS' }].map(item => (
                     <button key={item.type} onClick={() => setBookingType(item.type)} className={`py-3 rounded-lg text-sm font-medium touch-target ${bookingType === item.type ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}>
                       {item.label}<br/><span className="text-xs opacity-75">{item.desc}</span>
                     </button>
@@ -2269,10 +2950,187 @@ const CommandCentre = () => {
                   <input type="text" value={jobNotes} onChange={(e) => setJobNotes(e.target.value)} className="w-full p-3 border rounded-lg text-sm" placeholder="e.g. Fix cipher, service swell" />
                 </div>
                 
-                <div className={`text-lg mt-4 font-bold text-center p-3 rounded-lg ${selectedTicketToBook ? 'text-orange-700 bg-orange-200' : 'text-green-700 bg-green-200'}`}>👆 Now tap a day on the calendar</div>
-                <button onClick={() => { setSelectedCustomerToBook(null); setSelectedGroupToBook(null); setSelectedTicketToBook(null); setCustomQuote(''); setJobNotes(''); }} className="w-full mt-3 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target">Cancel</button>
+                {!selectedGroupToBook && !selectedTicketToBook && (
+                  <div className="grid grid-cols-2 gap-2 mt-3">
+                    <button onClick={clearBlock} className={`py-3 rounded-lg text-sm font-medium touch-target ${blockMode !== 'job' ? 'bg-gray-800 text-white' : 'bg-gray-200'}`}>One day</button>
+                    <button onClick={() => startBlock('job')} className={`py-3 rounded-lg text-sm font-medium touch-target ${blockMode === 'job' ? 'bg-gray-800 text-white' : 'bg-gray-200'}`}>Several days</button>
+                  </div>
+                )}
+                {blockMode === 'job'
+                  ? blockControls
+                  : <div className={`text-lg mt-3 font-bold text-center p-3 rounded-lg ${selectedTicketToBook ? 'text-orange-700 bg-orange-200' : 'text-green-700 bg-green-200'}`}>👆 Now tap a day on the calendar</div>}
+                <button onClick={() => { clearBlock(); setSelectedCustomerToBook(null); setSelectedGroupToBook(null); setSelectedTicketToBook(null); setCustomQuote(''); setJobNotes(''); }} className="w-full mt-3 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target">Cancel</button>
+                </div>
+                </div>
               </div>
-            )}
+  );
+
+  const allocatingBox = allocatingProject && (
+                <div className="bg-purple-500 text-white rounded-lg p-3 mb-2">
+                  <div className="font-bold">📍 Placing days</div>
+                  <div className="text-sm opacity-80">{allocatingProject.customerName}</div>
+                  <div className="font-medium">{allocatingProject.name}</div>
+                  {allocatingProject.notes && <div className="text-sm italic opacity-90">{allocatingProject.notes}</div>}
+                  {allocatingProject.estimatedDays && <div className="text-sm mt-1">{bookings.filter(b => b.type === 'project' && b.projectId === allocatingProject.id).length} of {allocatingProject.estimatedDays} days</div>}
+                  {String(allocatingProject.id).startsWith('temp_')
+                    ? <div className="mt-2 p-3 bg-white text-purple-800 rounded-lg font-bold text-center">⏳ Saving the job… one moment</div>
+                    : blockMode === 'project'
+                    ? blockControls
+                    : <>
+                        <div className="text-sm mt-2 opacity-90">Tap days to add/remove, or:</div>
+                        <button onClick={() => startBlock('project')} className="mt-2 w-full py-3 bg-purple-800 text-white rounded-lg font-medium touch-target">➕ Add a block of days</button>
+                      </>}
+                  <button onClick={() => { clearBlock(); setAllocatingProject(null); }} className="mt-2 w-full py-3 bg-white text-purple-700 rounded-lg font-medium touch-target">Done</button>
+                </div>
+  );
+
+  const offBlockBox = blockMode === 'off' && (
+    <div className="border-2 rounded-lg p-4 mb-3 bg-yellow-50 border-yellow-500">
+      <div className={isNarrow ? 'grid grid-cols-2 gap-4 items-start' : ''}>
+        <div>
+          <div className="font-bold text-lg text-yellow-900">🏖️ Days off</div>
+          <input type="text" value={blockReason} onChange={(e) => setBlockReason(e.target.value)} placeholder="Reason (e.g. Christmas, Holiday)" className="w-full p-3 border-2 rounded-lg mt-2" />
+          <button onClick={clearBlock} className="w-full mt-3 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target">Cancel</button>
+        </div>
+        <div>{blockControls}</div>
+      </div>
+    </div>
+  );
+
+  const plannerToolbar = (
+    <div className="bg-white rounded-lg shadow p-2 mb-3 flex flex-wrap items-center justify-between gap-2 no-print">
+      <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+        {[['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['year', 'Year']].map(([key, label]) => (
+          <button key={key} onClick={() => setPlannerView(key)} className={`${isNarrow ? 'px-3' : 'px-5'} py-3 rounded-lg font-bold touch-target ${plannerView === key ? 'bg-gray-800 text-white' : ''}`}>{label}</button>
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <button onClick={() => shiftFocus(-1)} aria-label="Earlier" className="px-4 py-3 rounded-lg bg-gray-200 text-xl font-bold touch-target">‹</button>
+        <div className="font-bold text-lg text-center" style={{ minWidth: isNarrow ? 190 : 300 }}>{plannerTitle}</div>
+        <button onClick={() => shiftFocus(1)} aria-label="Later" className="px-4 py-3 rounded-lg bg-gray-200 text-xl font-bold touch-target">›</button>
+        <button onClick={() => setCurrentDate(new Date())} className="px-4 py-3 rounded-lg bg-gray-800 text-white font-bold touch-target">Today</button>
+      </div>
+      <button onClick={toggleCalm} className={`px-4 py-3 rounded-lg font-medium touch-target ${calm ? 'bg-gray-800 text-white' : 'bg-gray-200'}`}>Calm view: {calm ? 'on' : 'off'}</button>
+    </div>
+  );
+
+  // One line of "time left" on the day / week / month views. The year view has the full bar.
+  const timeLeftStrip = (
+    <button onClick={() => setPlannerView('year')} className="w-full text-left bg-white rounded-lg shadow px-4 py-3 mb-3 touch-target no-print flex flex-wrap items-baseline gap-x-4 gap-y-1">
+      <span>⏳ <strong className="text-xl">{capacityData.planDaysLeft}</strong> working days left in {currentYear}</span>
+      <span><strong className={`text-xl ${capacityData.isOvercommitted ? 'text-red-600' : 'text-green-600'}`}>{capacityData.isOvercommitted ? capacityData.overcommittedBy : capacityData.daysFreeForProjects}</strong> {capacityData.isOvercommitted ? 'days short' : 'still free'}</span>
+      <span className="text-gray-600">+{capacityData.stretchFree} Thursdays if needed</span>
+      <span className="ml-auto text-blue-600 font-medium">Year view ›</span>
+    </button>
+  );
+
+  const activeBox = bookingBox || allocatingBox || offBlockBox;
+
+  // ============================================================
+  // NEEDS YOU: everything waiting for a decision, in one list
+  // ============================================================
+  const todayForNeeds = todayStrNow();
+  const visitBookings = bookings.filter(b => b.type !== 'project');
+  const byDate = (a, b) => String(a.date).localeCompare(String(b.date));
+  const needs = {
+    notDone: visitBookings.filter(b => b.date < todayForNeeds && ['scheduled', 'confirmed', 'in_progress'].includes(b.status)).sort(byDate),
+    toConfirm: visitBookings.filter(b => b.date >= todayForNeeds && b.status === 'scheduled').sort(byDate),
+    toInvoice: visitBookings.filter(b => b.status === 'completed').sort(byDate),
+    toBePaid: visitBookings.filter(b => b.status === 'invoiced').sort(byDate),
+  };
+  const openTicketCount = tickets.filter(t => t.status === 'new').length;
+  const todoCount = needs.notDone.length + needs.toConfirm.length + needs.toInvoice.length + needs.toBePaid.length + openTicketCount + jobsDue.length;
+
+  // Open a day from the list (on a tablet, jump to the calendar tab first)
+  const goToDay = (dateStr) => { setCurrentDate(parseLocalDate(dateStr)); setPlannerTab('calendar'); setSelectedDay(dateStr); };
+
+  const renderNeedGroup = (key, title, list, buttonLabel, onButton, extra) => {
+    if (list.length === 0) return null;
+    const expanded = !!needsExpanded[key];
+    const shown = expanded ? list : list.slice(0, 4);
+    return (
+      <div className="mb-4" data-need={key}>
+        <h3 className="font-bold text-gray-700 mb-2">{title} ({list.length})</h3>
+        {shown.map(b => (
+          <div key={b.id} className="flex items-center justify-between gap-2 p-2 mb-2 rounded-lg border-2 border-gray-200 bg-gray-50">
+            <button onClick={() => goToDay(b.date)} className="text-left flex-1 min-w-0 py-1 touch-target">
+              <div className="font-bold truncate">{nameFor(b.customerId)}</div>
+              <div className="text-sm text-gray-600">{dayWords(b.date)} · {getJobTypeLabel(b.type)}{extra ? extra(b) : ''}</div>
+            </button>
+            <button onClick={() => onButton(b)} className="flex-shrink-0 px-4 py-3 rounded-lg bg-gray-800 text-white font-bold touch-target">{buttonLabel}</button>
+          </div>
+        ))}
+        {list.length > 4 && (
+          <button onClick={() => setNeedsExpanded(prev => ({ ...prev, [key]: !expanded }))} className="w-full py-3 text-sm text-gray-600 bg-gray-100 rounded-lg touch-target">{expanded ? 'Show fewer' : `Show all ${list.length}`}</button>
+        )}
+      </div>
+    );
+  };
+  const headBtn = isNarrow ? 'px-3 py-3 text-base' : 'px-5 py-3 text-lg';
+
+  // ============================================================
+  // MAIN RENDER
+  // ============================================================
+  
+  return (
+    <div className={`min-h-screen bg-gray-100 p-3 flex flex-col ${calm ? 'calm' : ''}`}>
+      {loadError && (
+        <div className="bg-red-100 border-2 border-red-400 text-red-800 rounded-lg p-4 mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="font-medium">Could not load your data: {loadError}</div>
+          <button onClick={loadData} className="px-5 py-3 bg-red-600 text-white rounded-lg font-bold touch-target">Try again</button>
+        </div>
+      )}
+      {/* Header */}
+      <div className="bg-white rounded-lg shadow-lg p-4 mb-3 no-print">
+        <div className={`flex flex-wrap items-center justify-between ${isNarrow ? 'gap-2' : 'gap-4'}`}>
+          <h1 className={isNarrow ? "text-lg font-bold" : "text-3xl font-bold"}>🎹 COMMAND CENTRE</h1>
+          
+          {view === 'planner' && (
+            <div className="relative">
+              <input type="text" placeholder="🔍 Search customer..." value={plannerSearch} onChange={(e) => setPlannerSearch(e.target.value)} className={`${isNarrow ? 'w-40 px-3' : 'w-64 px-4'} py-2 border-2 rounded-lg`} />
+              {plannerSearch.length > 0 && (
+                <div className="absolute top-full left-0 right-0 bg-white border-2 rounded-b-lg shadow-lg max-h-64 overflow-y-auto z-50">
+                  {customers.filter(c => c.name.toLowerCase().includes(plannerSearch.toLowerCase())).slice(0, 10).map(c => (
+                    <div key={c.id} onMouseDown={(e) => e.preventDefault()} onClick={() => { setSelectedCustomerToBook(c); setBookingType('OTS'); setPlannerSearch(''); }} className="p-3 hover:bg-blue-50 cursor-pointer border-b">
+                      <div className="font-medium">{c.name}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          
+          <div className="flex gap-2">
+            <button onClick={() => { setView('planner'); setSelectedDay(null); setSelectedCustomer(null); }} className={`${headBtn} rounded-lg font-bold touch-target ${view === 'planner' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>📅 Planner</button>
+            <button onClick={() => { setView('customers'); setSelectedCustomer(null); }} className={`${headBtn} rounded-lg font-bold touch-target ${view.includes('customer') ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>👥 Customers</button>
+            <button onClick={() => setView('reports')} className={`${headBtn} rounded-lg font-bold touch-target ${view === 'reports' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>📊 Reports</button>
+          </div>
+
+          <button onClick={loadData} className={`${isNarrow ? 'px-3 text-base' : 'px-4 text-lg'} py-3 rounded-lg bg-gray-600 text-white font-medium touch-target`}>🔄 Refresh</button>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      {view === 'planner' && (
+        <div className={isNarrow ? "flex-1" : "flex gap-3 flex-1 min-h-0"}>
+          {/* TABS (tablet only). Hidden while something is being placed on the calendar. */}
+          {isNarrow && !activeBox && (
+            <div className="grid grid-cols-2 gap-2 mb-3 no-print">
+              <button onClick={() => setPlannerTab('calendar')} className={`py-3 rounded-lg text-lg font-bold touch-target ${plannerTab === 'calendar' ? 'bg-gray-800 text-white' : 'bg-white'}`}>📅 Calendar</button>
+              <button onClick={() => setPlannerTab('todo')} className={`py-3 rounded-lg text-lg font-bold touch-target ${plannerTab === 'todo' ? 'bg-gray-800 text-white' : 'bg-white'}`}>Needs you ({todoCount})</button>
+            </div>
+          )}
+          {/* LEFT PANEL */}
+          <div className={isNarrow ? `bg-white rounded-lg shadow-xl p-4 no-print max-w-3xl mx-auto ${plannerTab === 'todo' && !activeBox ? '' : 'hidden'}` : "w-80 flex-shrink-0 bg-white rounded-lg shadow-xl p-4 no-print overflow-y-auto scroll-panel"} style={isNarrow ? {} : {maxHeight: 'calc(100vh - 160px)'}}>
+            {!isNarrow && bookingBox}
+            {!isNarrow && offBlockBox}
+            
+            <h2 className="text-xl font-bold mb-3">Needs you ({todoCount})</h2>
+            {todoCount === 0 && <div className="text-center py-6 text-gray-500 text-lg">Nothing needs you right now.</div>}
+            {renderNeedGroup('notDone', 'Did this happen?', needs.notDone, '✓ Done', b => updateBookingStatus(b.id, 'completed'))}
+            {renderNeedGroup('toConfirm', 'To confirm', needs.toConfirm, '✓ Confirm', b => updateBookingStatus(b.id, 'confirmed'))}
+            {renderNeedGroup('toInvoice', 'To invoice', needs.toInvoice, 'Invoice', b => openInvoiceCalc(b))}
+            {renderNeedGroup('toBePaid', 'Waiting to be paid', needs.toBePaid, 'Paid', b => updateBookingStatus(b.id, 'paid'), b => ` · ${formatCurrency(b.price)}`)}
             
             {/* Tickets */}
             {(tickets.length > 0 || showAddTicket) && (() => {
@@ -2285,18 +3143,15 @@ const CommandCentre = () => {
                 const icon = typeIcons[ticket.type] || '📋';
                 return (
                   <div key={ticket.id} onClick={() => selectTicketToBook(ticket)} className={`p-3 rounded-lg cursor-pointer mb-2 border-2 ${isSelected ? 'bg-orange-100 border-orange-500' : 'bg-red-50 border-red-300 hover:border-orange-400'}`}>
-                    <div className="flex justify-between items-start">
-                      <div className="font-bold">{icon} {customer?.name || 'Unknown'}</div>
-                      <div className="flex gap-2">
-                        <button onClick={(e) => { e.stopPropagation(); openEditTicket(ticket); }} className="text-gray-400 hover:text-blue-500 text-sm">✏️</button>
-                        <button onClick={(e) => { e.stopPropagation(); deleteTicket(ticket.id); }} className="text-gray-400 hover:text-red-500 text-sm">✕</button>
-                      </div>
-                    </div>
+                    <div className="font-bold">{icon} {customer?.name || 'Unknown'}</div>
                     <div className="text-sm text-gray-700">{ticket.description}</div>
                     {ticket.dueDate && <div className="text-xs text-gray-500 mt-1">Due: {formatDate(ticket.dueDate)}</div>}
                     {!ticket.dueDate && ticket.dueType === 'next-visit' && <div className="text-xs text-gray-500 mt-1">Due: next visit</div>}
-                    <div className="flex justify-end mt-2">
-                      <button onClick={(e) => { e.stopPropagation(); closeTicket(ticket.id); }} className="text-sm bg-white border border-gray-300 px-3 py-2 rounded-lg hover:border-green-500">✓ Done</button>
+                    <div className="text-sm font-bold text-orange-700 mt-2">👆 Tap to book a visit</div>
+                    <div className="grid grid-cols-3 gap-2 mt-2">
+                      <button onClick={(e) => { e.stopPropagation(); closeTicket(ticket.id); }} className="text-sm bg-white border border-gray-300 py-3 rounded-lg touch-target">✓ Done</button>
+                      <button onClick={(e) => { e.stopPropagation(); openEditTicket(ticket); }} className="text-sm bg-white border border-gray-300 py-3 rounded-lg touch-target">Edit</button>
+                      <button onClick={(e) => { e.stopPropagation(); deleteTicket(ticket.id); }} className="text-sm bg-white border border-gray-300 py-3 rounded-lg touch-target text-red-700">Delete</button>
                     </div>
                   </div>
                 );
@@ -2306,7 +3161,7 @@ const CommandCentre = () => {
                 <div className="mb-4">
                   {activeTickets.length > 0 && (
                     <>
-                      <h2 className="text-lg font-bold mb-2">📥 Inbox ({activeTickets.length})</h2>
+                      <h3 className="font-bold text-gray-700 mb-2">Tickets ({activeTickets.length})</h3>
                       {activeTickets.map(renderTicket)}
                     </>
                   )}
@@ -2314,44 +3169,9 @@ const CommandCentre = () => {
               );
             })()}
             
-            {showAddTicket && (
-              <div className="mb-4 bg-yellow-50 p-3 rounded-lg">
-                <div className="font-bold mb-2">New Request</div>
-                <input type="text" placeholder="Search customer..." value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} className="w-full p-2 border rounded mb-2 text-sm" />
-                {customerSearch && filteredCustomersForSearch.length > 0 && (
-                  <div className="max-h-32 overflow-y-auto mb-2 bg-white border rounded">
-                    {filteredCustomersForSearch.map(c => (
-                      <div key={c.id} onMouseDown={(e) => e.preventDefault()} onClick={() => { setNewTicketCustomer(c.id); setCustomerSearch(c.name); }} className={`p-2 cursor-pointer hover:bg-blue-50 text-sm ${newTicketCustomer === c.id ? 'bg-blue-100' : ''}`}>{c.name}</div>
-                    ))}
-                  </div>
-                )}
-                <select value={newTicketType} onChange={(e) => setNewTicketType(e.target.value)} className="w-full p-2 border rounded mb-2 text-sm">
-                  <option value="tuning">🎹 Tuning Request</option>
-                  <option value="fault">⚠️ Fault</option>
-                  <option value="quote">💰 Quote Required</option>
-                  <option value="reminder">🔔 Reminder</option>
-                  <option value="part-return">🔧 Part to Return</option>
-                  <option value="follow-up">📞 Follow Up</option>
-                </select>
-                <input type="text" placeholder="Description..." value={newTicketDescription} onChange={(e) => setNewTicketDescription(e.target.value)} className="w-full p-2 border rounded mb-2 text-sm" />
-                <div className="flex gap-2">
-                  <button onClick={addTicket} disabled={!newTicketCustomer || !newTicketDescription} className="flex-1 py-2 bg-green-500 text-white rounded font-medium disabled:opacity-50">Save</button>
-                  <button onClick={() => { setShowAddTicket(false); setNewTicketCustomer(''); setNewTicketDescription(''); setNewTicketType('tuning'); setNewTicketDueDate(''); setCustomerSearch(''); }} className="flex-1 py-2 bg-gray-300 rounded font-medium">Cancel</button>
-                </div>
-              </div>
-            )}
-
-            {!showAddTicket && !selectedCustomerToBook && !allocatingProject && (
-              <button onClick={() => setShowAddTicket(true)} className="w-full py-3 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg font-medium touch-target border-2 border-red-300">+ Log Fault / Request</button>
-            )}
-            
-            <div className="border-b-2 mb-4 mt-4"></div>
-
-            <h2 className="text-xl font-bold mb-3">📋 Tunings Due</h2>
+            {jobsDue.length > 0 && <h3 className="font-bold text-gray-700 mb-2">Tunings to book ({jobsDue.length})</h3>}
             <div className="space-y-2 mb-4">
-              {jobsDue.length === 0 ? (
-                <div className="text-center py-8"><div className="text-5xl mb-3">🎉</div><p className="text-gray-500 text-lg">All caught up!</p></div>
-              ) : (() => {
+              {jobsDue.length === 0 ? null : (() => {
                 // Group jobs by tuningGroup
                 const grouped = {};
                 const ungrouped = [];
@@ -2409,11 +3229,46 @@ const CommandCentre = () => {
               })()}
             </div>
             
-            <div className="border-b-2 mb-4"></div>
+            {showAddTicket && (
+              <div className="mb-4 bg-yellow-50 p-3 rounded-lg">
+                <div className="font-bold mb-2">New ticket</div>
+                <input type="text" placeholder="Search customer..." value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} className="w-full p-2 border rounded mb-2 text-sm" />
+                {customerSearch && filteredCustomersForSearch.length > 0 && (
+                  <div className="max-h-32 overflow-y-auto mb-2 bg-white border rounded">
+                    {filteredCustomersForSearch.map(c => (
+                      <div key={c.id} onMouseDown={(e) => e.preventDefault()} onClick={() => { setNewTicketCustomer(c.id); setCustomerSearch(c.name); }} className={`p-2 cursor-pointer hover:bg-blue-50 text-sm ${newTicketCustomer === c.id ? 'bg-blue-100' : ''}`}>{c.name}</div>
+                    ))}
+                  </div>
+                )}
+                <select value={newTicketType} onChange={(e) => setNewTicketType(e.target.value)} className="w-full p-2 border rounded mb-2 text-sm">
+                  <option value="tuning">🎹 Tuning Request</option>
+                  <option value="fault">⚠️ Fault</option>
+                  <option value="quote">💰 Quote Required</option>
+                  <option value="reminder">🔔 Reminder</option>
+                  <option value="part-return">🔧 Part to Return</option>
+                  <option value="follow-up">📞 Follow Up</option>
+                </select>
+                <input type="text" placeholder="Description..." value={newTicketDescription} onChange={(e) => setNewTicketDescription(e.target.value)} className="w-full p-2 border rounded mb-2 text-sm" />
+                <div className="flex gap-2">
+                  <button onClick={addTicket} disabled={!newTicketCustomer || !newTicketDescription} className="flex-1 py-2 bg-green-500 text-white rounded font-medium disabled:opacity-50">Save</button>
+                  <button onClick={() => { setShowAddTicket(false); setNewTicketCustomer(''); setNewTicketDescription(''); setNewTicketType('tuning'); setNewTicketDueDate(''); setCustomerSearch(''); }} className="flex-1 py-2 bg-gray-300 rounded font-medium">Cancel</button>
+                </div>
+              </div>
+            )}
+
+            {!showAddTicket && !selectedCustomerToBook && !allocatingProject && (
+              <button onClick={() => setShowAddTicket(true)} className="w-full py-3 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg font-medium touch-target border-2 border-red-300">+ New ticket</button>
+            )}
+            {!showAddTicket && !selectedCustomerToBook && !allocatingProject && !blockMode && (
+              <button onClick={() => startBlock('off')} className="w-full mt-2 py-3 bg-yellow-100 hover:bg-yellow-200 text-yellow-900 rounded-lg font-medium touch-target border-2 border-yellow-400">🏖️ Block of days off</button>
+            )}
+            
+
+            <div className="border-b-2 mb-4 mt-4"></div>
 
             {/* Big Jobs */}
             <div className="mb-4">
-              <h2 className="text-lg font-bold mb-2">🔧 Big Jobs</h2>
+              <h2 className="text-xl font-bold mb-2">Big jobs</h2>
               
               {showNewProject && (
                 <div className="bg-purple-50 border-2 border-purple-300 rounded-lg p-3 mb-2">
@@ -2430,28 +3285,20 @@ const CommandCentre = () => {
                   {newProjectCustomer && (
                     <div className="bg-purple-100 p-2 rounded mb-2 flex justify-between items-center">
                       <span className="font-medium">{newProjectCustomer.name}</span>
-                      <button onClick={() => { setNewProjectCustomer(null); setProjectCustomerSearch(''); }} className="text-gray-500">✕</button>
+                      <button onClick={() => { setNewProjectCustomer(null); setProjectCustomerSearch(''); }} className="text-sm bg-white border border-gray-300 px-3 py-2 rounded-lg">Change</button>
                     </div>
                   )}
                   <input type="text" placeholder="Project name..." value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} className="w-full p-2 border rounded mb-2" />
                   <input type="number" placeholder="Est. days" value={newProjectEstDays} onChange={(e) => setNewProjectEstDays(e.target.value)} className="w-full p-2 border rounded mb-2" />
+                  <textarea placeholder="Notes (e.g. 1 day to cover, 1 day to uncover)" value={newProjectNotes} onChange={(e) => setNewProjectNotes(e.target.value)} className="w-full p-2 border rounded mb-2" rows="2" />
                   <div className="flex gap-2">
-                    <button onClick={() => { setShowNewProject(false); setNewProjectName(''); setNewProjectCustomer(null); setProjectCustomerSearch(''); setNewProjectEstDays(''); }} className="flex-1 py-2 bg-gray-200 rounded">Cancel</button>
+                    <button onClick={() => { setShowNewProject(false); setNewProjectName(''); setNewProjectCustomer(null); setProjectCustomerSearch(''); setNewProjectEstDays(''); setNewProjectNotes(''); }} className="flex-1 py-2 bg-gray-200 rounded">Cancel</button>
                     <button onClick={createProject} disabled={!newProjectName || !newProjectCustomer} className="flex-1 py-2 bg-purple-500 text-white rounded disabled:opacity-50">Create</button>
                   </div>
                 </div>
               )}
               
-              {allocatingProject && (
-                <div className="bg-purple-500 text-white rounded-lg p-3 mb-2">
-                  <div className="font-bold">📍 Allocating Days</div>
-                  <div className="text-sm opacity-80">{allocatingProject.customerName}</div>
-                  <div className="font-medium">{allocatingProject.name}</div>
-                  {allocatingProject.estimatedDays && <div className="text-sm mt-1">{bookings.filter(b => b.type === 'project' && b.projectId === allocatingProject.id).length} of {allocatingProject.estimatedDays} days</div>}
-                  <div className="text-xs mt-2 opacity-80">Tap days to add/remove</div>
-                  <button onClick={() => setAllocatingProject(null)} className="mt-2 w-full py-2 bg-white text-purple-700 rounded font-medium">Done</button>
-                </div>
-              )}
+              {!isNarrow && allocatingBox}
               
               {!showNewProject && !allocatingProject && activeProjects.length > 0 && (
                 <div className="space-y-2 mb-2">
@@ -2459,6 +3306,7 @@ const CommandCentre = () => {
                     <div key={project.id} onClick={() => setShowProjectSummary(project)} className="bg-purple-50 border-2 border-purple-200 rounded-lg p-3 cursor-pointer hover:border-purple-400">
                       <div className="text-sm text-gray-600">{project.customerName}</div>
                       <div className="font-medium">{project.name}</div>
+                      {project.notes && <div className="text-sm text-gray-600 italic">{project.notes}</div>}
                       <div className="text-sm text-purple-600">{project.estimatedDays ? `${project.days.length}/${project.estimatedDays} days` : `${project.days.length} days`}</div>
                     </div>
                   ))}
@@ -2466,13 +3314,34 @@ const CommandCentre = () => {
               )}
               
               {!showNewProject && !allocatingProject && (
-                <button onClick={() => setShowNewProject(true)} className="w-full py-3 bg-purple-100 hover:bg-purple-200 text-purple-700 rounded-lg font-medium touch-target border-2 border-purple-300">+ New Big Job</button>
+                <button onClick={() => setShowNewProject(true)} className="w-full py-3 bg-purple-100 hover:bg-purple-200 text-purple-700 rounded-lg font-medium touch-target border-2 border-purple-300">+ New big job</button>
+              )}
+              
+              {!showNewProject && !allocatingProject && completedProjects.length > 0 && (
+                <div className="mt-3">
+                  <button onClick={() => setShowCompletedProjects(!showCompletedProjects)} className="w-full py-3 text-sm text-gray-600 bg-gray-100 rounded-lg touch-target">{showCompletedProjects ? 'Hide' : 'Show'} completed big jobs ({completedProjects.length})</button>
+                  {showCompletedProjects && completedProjects.map(p => (
+                    <div key={p.id} className="mt-2 p-3 bg-gray-50 border rounded-lg flex justify-between items-center gap-2">
+                      <div>
+                        <div className="text-sm text-gray-600">{customers.find(c => c.id === p.customerId)?.name || 'Unknown'}</div>
+                        <div className="font-medium">{p.name}</div>
+                      </div>
+                      <button onClick={() => updateProject(p.id, { status: 'active' })} className="text-sm bg-white border border-gray-300 px-3 py-2 rounded-lg touch-target flex-shrink-0">Reopen</button>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </div>
-          <div className="flex-1 flex flex-col">
-            <CapacityBar />
-            <YearView />
+          <div className={isNarrow ? (plannerTab === 'calendar' || activeBox ? '' : 'hidden') : "flex-1 min-w-0 flex flex-col"}>
+            {isNarrow && activeBox && <div className="sticky top-0 z-30 no-print">{activeBox}</div>}
+            {plannerToolbar}
+            {plannerView === 'year' && !(isNarrow && activeBox) && <CapacityBar />}
+            {plannerView !== 'year' && !(isNarrow && activeBox) && timeLeftStrip}
+            {plannerView === 'year' && <YearView />}
+            {plannerView === 'week' && <WeekView />}
+            {plannerView === 'month' && <MonthView />}
+            {plannerView === 'day' && <DayPanel key={'day-view-' + focusStr} date={focusStr} embedded />}
           </div>
           {selectedDay && <DayPanel key={selectedDay} date={selectedDay} onClose={() => setSelectedDay(null)} />}
         </div>
@@ -2600,7 +3469,7 @@ const CommandCentre = () => {
                               {contact.email && <a href={`mailto:${contact.email}`} className="text-blue-600">✉️ {contact.email}</a>}
                             </div>
                           </div>
-                          <button onClick={() => setEditingContact({...contact})} className="text-gray-400 hover:text-blue-500 text-xl">✏️</button>
+                          <button onClick={() => setEditingContact({...contact})} className="text-sm bg-white border border-gray-300 px-4 py-3 rounded-lg touch-target">Edit</button>
                         </div>
                       )}
                     </div>
@@ -2684,8 +3553,8 @@ const CommandCentre = () => {
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={() => setEditingTicket(null)}>
             <div className="bg-white rounded-xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
               <div className="flex justify-between items-start mb-4">
-                <h2 className="text-2xl font-bold">Edit Ticket</h2>
-                <button onClick={() => setEditingTicket(null)} className="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
+                <h2 className="text-2xl font-bold">Edit ticket</h2>
+                <button onClick={() => setEditingTicket(null)} className="px-4 py-3 bg-gray-200 rounded-lg font-medium touch-target">✕ Close</button>
               </div>
               
               <div className="mb-4 p-3 bg-gray-100 rounded-lg">
@@ -2717,6 +3586,26 @@ const CommandCentre = () => {
           </div>
         );
       })()}
+      
+      {undoInfo && (
+        <div className="undo-bar no-print" role="status">
+          <span>{undoInfo.message}</span>
+          <button className="undo-btn" onClick={doUndo}>↩ Undo</button>
+          <button className="ok-btn" onClick={settleUndo}>OK</button>
+        </div>
+      )}
+      
+      {confirmDialog && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+            <div className="text-lg whitespace-pre-line">{confirmDialog.message}</div>
+            <div className="flex gap-3 mt-6">
+              <button onClick={() => setConfirmDialog(null)} className="flex-1 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target">Cancel</button>
+              <button onClick={() => { const run = confirmDialog.onConfirm; setConfirmDialog(null); run(); }} className="flex-1 py-3 bg-red-600 text-white rounded-lg text-lg font-bold touch-target">{confirmDialog.confirmLabel}</button>
+            </div>
+          </div>
+        </div>
+      )}
       
       <SavingIndicator />
     </div>
