@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Job Tracker · 13 Oct 2026 · access key -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -353,10 +354,14 @@
     
     <!-- Config Required -->
     <div id="config-screen" class="hidden">
-      <h1>⚙️ Setup Required</h1>
+      <h1 id="configTitle">⚙️ Setup Required</h1>
       <div class="config-bar">
         <label>Enter your Google Apps Script Web App URL:</label>
         <input type="text" id="apiUrlInput" placeholder="https://script.google.com/macros/s/...">
+      </div>
+      <div class="config-bar">
+        <label>Access key (only if you have set one):</label>
+        <input type="text" id="apiKeyInput" placeholder="xxxx-xxxx-xxxx-xxxx-xxxx" autocapitalize="off" autocomplete="off" spellcheck="false">
       </div>
       <button class="btn btn-secondary" onclick="saveConfig()">Save & Continue</button>
       <p style="margin-top: 16px; color: #888; font-size: 0.85rem;">
@@ -547,6 +552,7 @@
 
   <script>
     let API_URL = localStorage.getItem('organWorks_apiUrl') || '';
+    let API_KEY = localStorage.getItem('organWorks_apiKey') || '';
     let currentJobId = null;
     let currentJob = null;
     let timerInterval = null;
@@ -583,24 +589,37 @@
         }
       } catch (err) {
         console.error('Init error:', err);
+        if (err.needKey) return; // the access key screen is already showing
         showError('Failed to load job: ' + err.message);
       }
     }
     
     function saveConfig() {
-      const url = document.getElementById('apiUrlInput').value.trim();
+      const url = document.getElementById('apiUrlInput').value.trim() || API_URL;
+      const key = document.getElementById('apiKeyInput').value.trim();
       if (!url) {
         alert('Please enter your API URL');
         return;
       }
       localStorage.setItem('organWorks_apiUrl', url);
       API_URL = url;
+      if (key) {
+        localStorage.setItem('organWorks_apiKey', key);
+        API_KEY = key;
+      }
       init();
+    }
+    
+    function showKeyPrompt() {
+      document.getElementById('configTitle').textContent = '🔑 Access key needed';
+      document.getElementById('apiUrlInput').value = API_URL;
+      showScreen('config-screen');
     }
     
     async function apiCall(action, params = {}) {
       const url = new URL(API_URL);
       url.searchParams.set('action', action);
+      if (API_KEY) url.searchParams.set('key', API_KEY);
       
       Object.keys(params).forEach(key => {
         if (typeof params[key] === 'object') {
@@ -612,6 +631,13 @@
       
       const response = await fetch(url.toString());
       const data = await response.json();
+      
+      if (data && data.error === 'ACCESS_KEY_REQUIRED') {
+        showKeyPrompt();
+        const err = new Error('Access key needed');
+        err.needKey = true;
+        throw err;
+      }
       
       if (data && data.error) {
         throw new Error(data.error);
