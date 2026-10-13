@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Site Tracker · 13 Oct 2026 · changes kept on the phone until the sheet confirms them; access key -->
+<!-- Site Tracker · 13 Oct 2026 (b) · open tickets shown at the visit; changes kept on the phone until confirmed; access key -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -449,6 +449,43 @@
       cursor: pointer;
     }
     
+    .while-there {
+      background: rgba(245, 158, 11, 0.12);
+      border: 2px solid #f59e0b;
+      border-radius: 12px;
+      padding: 12px;
+      margin: 12px 0;
+    }
+    
+    .while-there-title {
+      font-size: 14px;
+      font-weight: bold;
+      color: #fbbf24;
+      margin-bottom: 6px;
+    }
+    
+    .while-there-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 0;
+      font-size: 15px;
+      font-weight: normal;
+    }
+    
+    .while-there-item button {
+      flex-shrink: 0;
+      min-height: 44px;
+      padding: 8px 14px;
+      font-size: 15px;
+      font-weight: bold;
+      background: #0f172a;
+      color: #fff;
+      border: 2px solid #f59e0b;
+      border-radius: 10px;
+    }
+    
     .pending-banner {
       background: #f59e0b;
       color: #1a1a1a;
@@ -650,6 +687,7 @@
     // State
     let bookings = [];
     let customers = [];
+    let tickets = []; // open tickets, shown on the customer's visit
     let activeTimers = {}; // bookingId -> startTime
     let bookingMaterials = {}; // bookingId -> [{description, cost}]
     let materialsList = []; // quick-pick list from sheet
@@ -681,6 +719,14 @@
         String(today.getDate()).padStart(2, '0');
     }
     
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    
+    const TICKET_ICONS = { tuning: '🎹', fault: '⚠️', quote: '💰', reminder: '🔔', 'part-return': '🔧', 'follow-up': '📞' };
+    
     function isValidTime(value) {
       return !!value && value !== '' && !isNaN(new Date(value).getTime());
     }
@@ -697,7 +743,7 @@
     }
     
     function saveCache() {
-      writeStore(CACHE_KEY, { date: todayString(), bookings: bookings, customers: customers, materialsList: materialsList });
+      writeStore(CACHE_KEY, { date: todayString(), bookings: bookings, customers: customers, materialsList: materialsList, tickets: tickets });
     }
     
     // Init
@@ -837,6 +883,10 @@
     // Changes still waiting on the phone are newer than what the sheet says
     function applyPending(list) {
       loadPending().forEach(item => {
+        if (item.action === 'updateTicket' && item.params && item.params.data && item.params.data.status === 'closed') {
+          tickets = tickets.filter(t => t.id !== item.params.data.id);
+          return;
+        }
         if (item.action !== 'updateBooking' || !item.params || !item.params.data) return;
         const booking = list.find(b => b.id === item.params.data.id);
         if (booking) Object.assign(booking, item.params.data);
@@ -869,6 +919,7 @@
         const data = await apiCall('getAllData');
         customers = data.customers || [];
         materialsList = data.materialsList || [];
+        tickets = (data.tickets || []).filter(t => t.status === 'new');
         
         // Filter bookings for today
         bookings = (data.bookings || []).filter(b => {
@@ -889,6 +940,7 @@
           bookings = cache.bookings || [];
           customers = cache.customers || [];
           materialsList = cache.materialsList || [];
+          tickets = cache.tickets || [];
           usingCache = true;
         } else {
           document.getElementById('content').innerHTML = `
@@ -988,7 +1040,20 @@
         }
         
         if (booking.notes) {
-          html += `<div class="job-notes">"${booking.notes}"</div>`;
+          html += `<div class="job-notes">"${escapeHtml(booking.notes)}"</div>`;
+        }
+        
+        // Open tickets for this customer: things to do or check while here
+        const openTickets = tickets.filter(t => t.customerId === booking.customerId);
+        if (openTickets.length > 0) {
+          html += `<div class="while-there"><div class="while-there-title">📋 While you're here</div>`;
+          openTickets.forEach(t => {
+            html += `<div class="while-there-item">
+              <span>${TICKET_ICONS[t.type] || '📋'} ${escapeHtml(t.description)}</span>
+              <button onclick="closeTicket('${escapeHtml(t.id)}')">✓ Done</button>
+            </div>`;
+          });
+          html += `</div>`;
         }
         
         // Time info
@@ -1319,6 +1384,14 @@
           materials: materialsJson
         }
       });
+    }
+    
+    // Mark a ticket as done. It leaves the list but stays in the sheet (status "closed").
+    async function closeTicket(ticketId) {
+      tickets = tickets.filter(t => t.id !== ticketId);
+      saveCache();
+      renderBookings();
+      await send('updateTicket', { data: { id: ticketId, status: 'closed' } });
     }
     
     // Ticket Modal Functions
