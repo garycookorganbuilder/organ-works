@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Site Tracker · 13 Oct 2026 (b) · open tickets shown at the visit; changes kept on the phone until confirmed; access key -->
+<!-- Site Tracker · 13 Oct 2026 (e) · three end-of-visit questions; open tickets shown at the visit; changes kept on the phone until confirmed; access key -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -218,13 +218,29 @@
     }
     
     .material-item .remove-btn {
-      color: #ef4444;
-      background: none;
-      border: none;
-      font-size: 18px;
-      padding: 0 0 0 12px;
+      color: #fca5a5;
+      background: #0f172a;
+      border: 2px solid #7f1d1d;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: bold;
+      min-height: 40px;
+      padding: 6px 12px;
+      margin-left: 10px;
       cursor: pointer;
     }
+    
+    /* End-of-visit questions */
+    .wrap-step { color: #888; font-size: 14px; font-weight: bold; text-transform: uppercase; margin-bottom: 8px; }
+    .wrap-question { font-size: 22px; font-weight: bold; line-height: 1.3; margin-bottom: 20px; }
+    .wrap-choices { display: flex; gap: 12px; }
+    .wrap-choices button { flex: 1; min-height: 64px; font-size: 20px; font-weight: bold; border: none; border-radius: 12px; cursor: pointer; }
+    .wrap-no { background: #333; color: #fff; }
+    .wrap-yes { background: #22c55e; color: #fff; }
+    .wrap-form input, .wrap-form select, .wrap-form textarea { width: 100%; padding: 12px; font-size: 16px; border: 2px solid #333; border-radius: 8px; background: #0f172a; color: #fff; margin-bottom: 10px; font-family: inherit; }
+    .wrap-form textarea { min-height: 90px; }
+    .wrap-list { font-size: 15px; font-weight: normal; margin-bottom: 10px; }
+    .wrap-skip { display: block; width: 100%; margin-top: 16px; padding: 12px; background: none; border: none; color: #888; font-size: 15px; text-decoration: underline; }
     
     .add-material {
       display: flex;
@@ -404,6 +420,7 @@
     }
     
     .add-material-manual button {
+      min-height: 44px;
       padding: 10px 16px;
       background: #3b82f6;
       color: #fff;
@@ -510,11 +527,13 @@
       background: #333;
       border: none;
       color: #fff;
-      width: 44px;
-      height: 44px;
-      border-radius: 50%;
-      font-size: 20px;
+      min-height: 44px;
+      padding: 0 14px;
+      border-radius: 22px;
+      font-size: 15px;
+      font-weight: bold;
       cursor: pointer;
+      z-index: 20;
     }
     
     /* Ticket Modal */
@@ -611,7 +630,7 @@
   </style>
 </head>
 <body>
-  <button class="refresh-btn" onclick="loadTodaysBookings()">🔄</button>
+  <button class="refresh-btn" onclick="loadTodaysBookings()">🔄 Refresh</button>
   <div class="pending-banner" id="pendingBanner" style="display: none;" onclick="loadTodaysBookings()"></div>
   
   <div class="header">
@@ -629,7 +648,7 @@
   <!-- Ticket Modal -->
   <div class="modal-overlay" id="ticketModal">
     <div class="modal">
-      <h2>📋 Add Ticket</h2>
+      <h2>📋 New ticket</h2>
       <div class="modal-field">
         <label>Customer</label>
         <input type="text" id="ticketCustomerName" readonly>
@@ -663,6 +682,11 @@
         <button class="save-btn" onclick="saveTicket()">Save</button>
       </div>
     </div>
+  </div>
+  
+  <!-- End-of-visit questions: one at a time, after FINISHED -->
+  <div class="modal-overlay" id="wrapModal">
+    <div class="modal" id="wrapContent"></div>
   </div>
   
   <div class="config-panel" id="configPanel" style="display: none;">
@@ -982,14 +1006,15 @@
     
     function getJobTypeLabel(type) {
       // New service types
-      if (type === 'OTS') return 'On-site (with helper)';
-      if (type === 'TSC') return 'Solo Site Work';
+      if (type === 'OTS') return 'With helper';
+      if (type === 'TSC') return 'Solo';
       if (type === 'WS') return 'Workshop';
+      if (type === 'project') return 'Big job';
       // Legacy types
-      if (type === 'tuning_full') return 'Tuning (Full Day)';
-      if (type === 'tuning_half') return 'Tuning (Half Day)';
-      if (type === 'fault') return 'Fault Visit';
-      if (type === 'big') return 'Big Job';
+      if (type === 'tuning_full') return 'Tuning (full day)';
+      if (type === 'tuning_half') return 'Tuning (half day)';
+      if (type === 'fault') return 'Fault visit';
+      if (type === 'big') return 'Big job';
       return type || 'Visit';
     }
     
@@ -1083,10 +1108,10 @@
           html += `<button class="btn btn-start" onclick="startJob('${booking.id}')">▶️ ARRIVED</button>`;
         } else if (isActive) {
           html += `<button class="btn btn-stop" onclick="stopJob('${booking.id}')">⏹️ FINISHED</button>`;
-          html += `<button class="btn btn-ticket" onclick="openTicketModal('${booking.customerId}', '${customer.name.replace(/'/g, "\\'")}')">📋 Add Ticket</button>`;
+          html += `<button class="btn btn-ticket" onclick="openTicketModal('${booking.customerId}', '${customer.name.replace(/'/g, "\\'")}')">📋 New ticket</button>`;
         } else {
           html += `<button class="btn btn-done" disabled>✓ Complete</button>`;
-          html += `<button class="btn btn-ticket" onclick="openTicketModal('${booking.customerId}', '${customer.name.replace(/'/g, "\\'")}')">📋 Add Ticket</button>`;
+          html += `<button class="btn btn-ticket" onclick="openTicketModal('${booking.customerId}', '${customer.name.replace(/'/g, "\\'")}')">📋 New ticket</button>`;
         }
         
         // Materials section (show when active or completed)
@@ -1102,9 +1127,9 @@
             const qty = mat.quantity || 1;
             const lineTotal = (parseFloat(mat.cost) * qty).toFixed(2);
             html += `<div class="material-item">
-              <span class="desc">${mat.description} ${qty > 1 ? `×${qty}` : ''}</span>
+              <span class="desc">${escapeHtml(mat.description)} ${qty > 1 ? `×${qty}` : ''}</span>
               <span class="cost">£${lineTotal}</span>
-              <button class="remove-btn" onclick="removeMaterial('${booking.id}', ${idx})">✕</button>
+              <button class="remove-btn" onclick="removeMaterial('${booking.id}', ${idx})">Remove</button>
             </div>`;
           });
           
@@ -1133,7 +1158,7 @@
             <input type="text" class="desc-input" id="mat-desc-${booking.id}" placeholder="Description">
             <input type="number" class="cost-input" id="mat-cost-${booking.id}" placeholder="£">
             <input type="number" class="qty-input-manual" id="mat-qty-manual-${booking.id}" value="1" min="1" placeholder="Qty">
-            <button onclick="addMaterial('${booking.id}')">+</button>
+            <button onclick="addMaterial('${booking.id}')">Add</button>
           </div>`;
           
           if (materialsTotal > 0) {
@@ -1226,7 +1251,170 @@
       }
       
       renderBookings();
+      startWrapUp(bookingId);
       await sending;
+    }
+    
+    // ------------------------------------------------------------
+    // End-of-visit questions
+    // Three questions, one at a time, so nothing is left to memory.
+    // ------------------------------------------------------------
+    
+    let wrap = null; // { bookingId, step, mode }
+    
+    function startWrapUp(bookingId) {
+      wrap = { bookingId: bookingId, step: 1, mode: 'ask' };
+      renderWrapUp();
+      document.getElementById('wrapModal').classList.add('active');
+    }
+    
+    function closeWrapUp() {
+      wrap = null;
+      document.getElementById('wrapModal').classList.remove('active');
+      renderBookings();
+    }
+    
+    function wrapNext() {
+      if (!wrap) return;
+      wrap.step += 1;
+      wrap.mode = 'ask';
+      if (wrap.step > 3) { wrap.step = 4; }
+      renderWrapUp();
+    }
+    
+    function wrapYes() {
+      if (!wrap) return;
+      if (wrap.step === 3) { wrapSaveFollowUp(); return; }
+      wrap.mode = 'form';
+      renderWrapUp();
+    }
+    
+    // The buttons sit in the same place on each question, so a double-tap
+    // must not answer the next question as well.
+    let wrapShownAt = 0;
+    function wrapTapOk() { return Date.now() - wrapShownAt > 450; }
+    
+    function renderWrapUp() {
+      if (!wrap) return;
+      wrapShownAt = Date.now();
+      const el = document.getElementById('wrapContent');
+      const booking = bookings.find(b => b.id === wrap.bookingId);
+      const customer = booking ? getCustomerById(booking.customerId) : { name: '' };
+      const questions = {
+        1: 'Did you use any materials or parts?',
+        2: 'Is there anything to fix or check next time?',
+        3: 'Does this customer need another visit booking?'
+      };
+      
+      if (wrap.step >= 4) {
+        el.innerHTML = `<div class="wrap-question">✓ All done for ${escapeHtml(customer.name)}.</div>
+          <div class="wrap-choices"><button class="wrap-yes" onclick="if (wrapTapOk()) closeWrapUp()">Close</button></div>`;
+        return;
+      }
+      
+      let html = `<div class="wrap-step">Before you go · ${wrap.step} of 3</div>`;
+      html += `<div class="wrap-question">${questions[wrap.step]}</div>`;
+      
+      if (wrap.mode === 'ask') {
+        html += `<div class="wrap-choices">
+          <button class="wrap-no" onclick="if (wrapTapOk()) wrapNext()">No</button>
+          <button class="wrap-yes" onclick="if (wrapTapOk()) wrapYes()">Yes</button>
+        </div>`;
+      } else if (wrap.step === 1) {
+        const materials = bookingMaterials[wrap.bookingId] || [];
+        html += `<div class="wrap-form">`;
+        if (materials.length > 0) {
+          html += `<div class="wrap-list">` + materials.map(m => `• ${escapeHtml(m.description)}${(m.quantity || 1) > 1 ? ' ×' + (m.quantity || 1) : ''} · £${(parseFloat(m.cost) * (m.quantity || 1)).toFixed(2)}`).join('<br>') + `</div>`;
+        }
+        if (materialsList.length > 0) {
+          html += `<select id="wrapMatPick" onchange="wrapPickMaterial()"><option value="">Choose from your list…</option>` +
+            materialsList.map((m, i) => `<option value="${i}">${escapeHtml(m.name)} · £${parseFloat(m.price).toFixed(2)}</option>`).join('') + `</select>`;
+        }
+        html += `<input type="text" id="wrapMatDesc" placeholder="What was it?">
+          <input type="number" id="wrapMatCost" placeholder="Cost each (£)" step="0.01" inputmode="decimal">
+          <div class="wrap-step" style="margin: 4px 0 -4px;">How many?</div>
+          <input type="number" id="wrapMatQty" value="1" min="1" inputmode="numeric">
+          <div class="wrap-choices">
+            <button class="wrap-no" onclick="wrapAddMaterial(false)">Add another</button>
+            <button class="wrap-yes" onclick="wrapAddMaterial(true)">Save and go on</button>
+          </div>
+        </div>`;
+      } else if (wrap.step === 2) {
+        html += `<div class="wrap-form">
+          <select id="wrapTicketType">
+            <option value="fault">⚠️ Fault</option>
+            <option value="quote">💰 Quote required</option>
+            <option value="reminder">🔔 Reminder</option>
+            <option value="part-return">🔧 Part to return</option>
+            <option value="follow-up">📞 Follow up</option>
+          </select>
+          <textarea id="wrapTicketText" placeholder="What needs doing?"></textarea>
+          <div class="wrap-choices">
+            <button class="wrap-no" onclick="wrapSaveTicket(false)">Add another</button>
+            <button class="wrap-yes" onclick="wrapSaveTicket(true)">Save and go on</button>
+          </div>
+        </div>`;
+      }
+      
+      html += `<button class="wrap-skip" onclick="closeWrapUp()">Skip the rest</button>`;
+      el.innerHTML = html;
+    }
+    
+    function wrapPickMaterial() {
+      const pick = document.getElementById('wrapMatPick');
+      if (!pick || pick.value === '') return;
+      const mat = materialsList[parseInt(pick.value)];
+      if (!mat) return;
+      document.getElementById('wrapMatDesc').value = mat.name;
+      document.getElementById('wrapMatCost').value = mat.price;
+    }
+    
+    async function wrapAddMaterial(goOn) {
+      if (!wrap) return;
+      const description = document.getElementById('wrapMatDesc').value.trim();
+      const cost = parseFloat(document.getElementById('wrapMatCost').value);
+      const quantity = parseInt(document.getElementById('wrapMatQty').value) || 1;
+      const bookingId = wrap.bookingId;
+      
+      if (description && !isNaN(cost)) {
+        if (!bookingMaterials[bookingId]) bookingMaterials[bookingId] = [];
+        bookingMaterials[bookingId].push({ description: description, cost: cost, quantity: quantity });
+        const saving = saveMaterials(bookingId);
+        if (goOn) wrapNext(); else renderWrapUp();
+        await saving;
+      } else if (goOn && !description) {
+        wrapNext(); // nothing typed: just move on
+      } else {
+        alert('Type what it was and what it cost.');
+      }
+    }
+    
+    async function wrapSaveTicket(goOn) {
+      if (!wrap) return;
+      const description = document.getElementById('wrapTicketText').value.trim();
+      const type = document.getElementById('wrapTicketType').value;
+      const booking = bookings.find(b => b.id === wrap.bookingId);
+      
+      if (description && booking) {
+        const sending = send('addTicket', { data: { customerId: booking.customerId, type: type, description: description, dueDate: '', dueType: 'next-visit', status: 'new' } });
+        if (goOn) wrapNext(); else renderWrapUp();
+        await sending;
+      } else if (goOn) {
+        wrapNext(); // nothing typed: just move on
+      } else {
+        alert('Type what needs doing.');
+      }
+    }
+    
+    async function wrapSaveFollowUp() {
+      if (!wrap) return;
+      const booking = bookings.find(b => b.id === wrap.bookingId);
+      wrapNext();
+      if (booking) {
+        const now = new Date();
+        const thisMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-01';
+        await send('addTicket', { data: { customerId: booking.customerId, type: 'follow-up', description: 'Book another visit', dueDate: thisMonth, dueType: 'month', status: 'new' } });
+      }
     }
     
     async function addMaterial(bookingId) {
