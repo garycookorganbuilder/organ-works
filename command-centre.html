@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Command Centre · 14 Oct 2026 (f) · customer portal (codes, visible tickets, access notes); opens on the week; day/week/month/year; Needs you list; Undo; calm view; one word for each thing -->
+<!-- Command Centre · 14 Oct 2026 (f2) · edit a church's name, address, rate and distance; customer portal (codes, visible tickets, access notes); opens on the week; day/week/month/year; Needs you list; Undo; calm view; one word for each thing -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -250,6 +250,7 @@ const CommandCentre = () => {
   const [showAddTicket, setShowAddTicket] = useState(false);
   const [editingTicket, setEditingTicket] = useState(null);
   const [accessNotesDraft, setAccessNotesDraft] = useState(null); // null = not editing
+  const [customerDraft, setCustomerDraft] = useState(null); // name, address, rate, distance being edited
   const [newTicketCustomer, setNewTicketCustomer] = useState('');
   const [newTicketDescription, setNewTicketDescription] = useState('');
   const [newTicketType, setNewTicketType] = useState('tuning');
@@ -3444,8 +3445,29 @@ const CommandCentre = () => {
         return (
           <div className="bg-white rounded-lg shadow-xl p-6 max-w-4xl mx-auto">
             <div className="flex justify-between items-start mb-6">
-              <h2 className="text-3xl font-bold">{editingCustomer.name}</h2>
-              <button onClick={() => { setView('customers'); setEditingContact(null); setShowAddContact(false); setAccessNotesDraft(null); }} className="bg-gray-300 px-6 py-3 rounded-lg text-xl touch-target">← Back</button>
+              <div className="flex-1 min-w-0 mr-4">
+                {customerDraft ? (
+                  <div className="grid gap-3" data-customer-edit>
+                    <input type="text" value={customerDraft.name} onChange={(e) => setCustomerDraft({ ...customerDraft, name: e.target.value })} className="p-3 border-2 rounded-lg text-2xl font-bold w-full" placeholder="Church name" />
+                    <input type="text" value={customerDraft.notes} onChange={(e) => setCustomerDraft({ ...customerDraft, notes: e.target.value })} className="p-3 border-2 rounded-lg w-full" placeholder="Address / notes (yours only)" />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div><label className="text-sm text-gray-600">Custom tuning rate (£, blank = standard)</label><input type="number" value={customerDraft.customRate} onChange={(e) => setCustomerDraft({ ...customerDraft, customRate: e.target.value })} className="p-3 border-2 rounded-lg w-full" /></div>
+                      <div><label className="text-sm text-gray-600">Miles from workshop</label><input type="number" value={customerDraft.distance} onChange={(e) => setCustomerDraft({ ...customerDraft, distance: e.target.value })} className="p-3 border-2 rounded-lg w-full" /></div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => { if (!customerDraft.name.trim()) return; const updated = { ...editingCustomer, name: customerDraft.name.trim(), notes: customerDraft.notes, customRate: customerDraft.customRate === '' ? null : parseFloat(customerDraft.customRate), distance: customerDraft.distance === '' ? '' : parseFloat(customerDraft.distance) }; setEditingCustomer(updated); setCustomerDraft(null); updateCustomer(updated); }} className="bg-green-500 text-white px-5 py-3 rounded-lg font-bold touch-target">Save</button>
+                      <button onClick={() => setCustomerDraft(null)} className="bg-gray-200 px-5 py-3 rounded-lg touch-target">Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <h2 className="text-3xl font-bold">{editingCustomer.name}</h2>
+                    <div className="text-gray-600 mt-1">{editingCustomer.notes || <span className="text-gray-400">No address / notes</span>} · {editingCustomer.customRate ? formatCurrency(editingCustomer.customRate) + ' tuning rate' : 'Standard rate'} · {editingCustomer.distance ? editingCustomer.distance + ' miles' : 'distance not set'}</div>
+                    <button onClick={() => setCustomerDraft({ name: editingCustomer.name || '', notes: editingCustomer.notes || '', customRate: editingCustomer.customRate == null ? '' : String(editingCustomer.customRate), distance: editingCustomer.distance == null ? '' : String(editingCustomer.distance) })} className="mt-2 bg-white border-2 border-gray-300 px-4 py-3 rounded-lg touch-target">✏️ Edit name, address, rate, distance</button>
+                  </div>
+                )}
+              </div>
+              <button onClick={() => { setView('customers'); setEditingContact(null); setShowAddContact(false); setAccessNotesDraft(null); setCustomerDraft(null); }} className="bg-gray-300 px-6 py-3 rounded-lg text-xl touch-target">← Back</button>
             </div>
             
             {/* Contacts */}
