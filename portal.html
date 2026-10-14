@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<!-- Customer Portal · 14 Oct 2026 (f) · one church at a time, signed in with a short code -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>Customer portal · Gary Cook Organbuilder</title>
+  <style>
+    :root {
+      --ink: #1f2430; --muted: #5f6675; --line: #d9dde5; --paper: #ffffff; --bg: #f3f4f7;
+      --accent: #1f5f8b; --accent-ink: #ffffff; --soft: #e8f0f7; --good: #2f7d4f; --warn: #b4532a;
+    }
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 18px; line-height: 1.45; color: var(--ink); background: var(--bg); }
+    .wrap { max-width: 620px; margin: 0 auto; padding: 16px 16px 48px; }
+    header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 8px 0 16px; }
+    header .brand { font-weight: 700; font-size: 17px; color: var(--muted); }
+    header .brand span { display: block; font-size: 22px; color: var(--ink); }
+    h1 { font-size: 28px; margin: 0 0 6px; }
+    h2 { font-size: 20px; margin: 0 0 10px; }
+    p { margin: 0 0 12px; }
+    .muted { color: var(--muted); }
+    .card { background: var(--paper); border: 1px solid var(--line); border-radius: 14px; padding: 18px; margin-bottom: 14px; }
+    .btn { display: block; width: 100%; min-height: 56px; padding: 14px 18px; border: 2px solid var(--accent); border-radius: 12px; background: var(--accent); color: var(--accent-ink); font-size: 19px; font-weight: 700; text-align: center; cursor: pointer; margin-top: 10px; }
+    .btn.secondary { background: var(--paper); color: var(--accent); }
+    .btn.quiet { background: none; border-color: transparent; color: var(--muted); font-weight: 500; font-size: 17px; min-height: 44px; }
+    .btn.danger { background: var(--paper); border-color: #c8552f; color: #c8552f; }
+    .btn:disabled { opacity: .5; cursor: default; }
+    .btn.choice { text-align: left; background: var(--paper); color: var(--ink); border-color: var(--line); font-weight: 600; }
+    .btn.choice small { display: block; font-weight: 400; color: var(--muted); font-size: 15px; margin-top: 2px; }
+    .btn.choice.on { border-color: var(--accent); background: var(--soft); }
+    label { display: block; font-weight: 600; margin: 12px 0 6px; }
+    input[type=text], input[type=tel], input[type=email], textarea, select { width: 100%; font: inherit; padding: 13px 14px; border: 2px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--ink); min-height: 52px; }
+    input:focus, textarea:focus, select:focus { outline: 3px solid #bcd4e8; border-color: var(--accent); }
+    textarea { min-height: 110px; resize: vertical; }
+    .code-input { font-size: 30px; letter-spacing: 6px; text-transform: uppercase; text-align: center; font-family: ui-monospace, Menlo, Consolas, monospace; }
+    .row { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; padding: 12px 0; border-top: 1px solid var(--line); }
+    .row:first-of-type { border-top: 0; }
+    .row .main { flex: 1; min-width: 0; }
+    .row .when { font-weight: 700; }
+    .pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 14px; font-weight: 700; background: var(--soft); color: var(--accent); white-space: nowrap; }
+    .pill.done { background: #e6f2ea; color: var(--good); }
+    .pill.warn { background: #fbeae2; color: var(--warn); }
+    .notice { background: #fff8e6; border: 1px solid #f1d58a; border-radius: 10px; padding: 12px 14px; margin: 10px 0; }
+    .error { background: #fbeae2; border: 1px solid #ebb8a1; color: #7a2e12; border-radius: 10px; padding: 12px 14px; margin: 10px 0; }
+    .ok { background: #e6f2ea; border: 1px solid #b7dcc4; color: #1f5133; border-radius: 10px; padding: 12px 14px; margin: 10px 0; }
+    .small { font-size: 15px; }
+    .link { background: none; border: 0; color: var(--accent); text-decoration: underline; font: inherit; cursor: pointer; padding: 10px 0; min-height: 44px; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 420px) { .grid2 { grid-template-columns: 1fr; } }
+    .toprow { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+    .toprow .btn { margin-top: 0; width: auto; min-height: 48px; padding: 10px 16px; font-size: 17px; }
+    .month { display: inline-block; background: var(--soft); color: var(--accent); border-radius: 8px; padding: 4px 10px; margin: 2px 4px 2px 0; font-weight: 600; font-size: 16px; }
+    .confirm-overlay { position: fixed; inset: 0; background: rgba(20,25,35,.5); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+    .confirm { background: var(--paper); border-radius: 14px; padding: 20px; max-width: 420px; width: 100%; }
+    ul.plain { margin: 6px 0 0; padding-left: 20px; }
+    .footer { color: var(--muted); font-size: 14px; text-align: center; margin-top: 30px; }
+    .footer a { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">Gary Cook Organbuilder <span>Customer portal</span></div>
+    </header>
+    <div id="app"></div>
+    <div class="footer">Questions? Ring or email as usual.<span> · </span><a href="#" id="privacyLink">Privacy</a></div>
+  </div>
+  <div id="confirmHost"></div>
+
+  <script>
+    // ------------------------------------------------------------
+    // SETUP: paste the Web App URL from Apps Script between the quotes.
+    // It is the same address the Command Centre uses.
+    // ------------------------------------------------------------
+    const API_URL = 'https://script.google.com/macros/s/AKfycbyatgKSALS-Rhq6HJaI54zZjGdBB4RA9dOfO_d_iQUW4suaWF0hXXeBHOOoNJPnOZ1R/exec';
+    // Optional: the address of the Privacy page on your website, e.g. 'https://www.example.co.uk/privacy'
+    const PRIVACY_URL = '';
+
+    const CODE_KEY = 'organPortal_code';
+    const KINDS = [
+      { id: 'full',    label: 'Full tuning',     hint: 'The whole organ, as at the regular visit' },
+      { id: 'budget',  label: 'Budget tuning',   hint: 'A shorter visit covering the stops most used' },
+      { id: 'touchup', label: 'Touch-up tuning', hint: 'A quick visit before a concert or special service' },
+      { id: 'fault',   label: 'Something is wrong', hint: 'A note not sounding, a cipher, a noise, no wind…' },
+      { id: 'quote',   label: 'Ask for a quote', hint: 'For repair, cleaning or improvement work' }
+    ];
+    const ROLES = ['Booking contact', 'Organist', 'Keyholder', 'Churchwarden', 'Vicar / minister', 'Treasurer', 'Other'];
+    const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+    let state = { screen: 'signin', code: '', data: null, busy: false, error: '', ok: '', form: {} };
+
+    function readCode() { try { return localStorage.getItem(CODE_KEY) || ''; } catch (e) { return ''; } }
+    function writeCode(c) { try { if (c) localStorage.setItem(CODE_KEY, c); else localStorage.removeItem(CODE_KEY); } catch (e) {} }
+    function esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+    function niceDate(ds) {
+      const p = String(ds).split('-').map(Number);
+      if (p.length !== 3 || isNaN(p[2])) return ds;
+      return new Date(p[0], p[1] - 1, p[2], 12).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+    }
+
+    async function api(action, params) {
+      if (!API_URL || API_URL.indexOf('http') !== 0) throw new Error('This portal has not been set up yet. Please ring or email instead.');
+      const url = new URL(API_URL);
+      url.searchParams.set('action', action);
+      Object.keys(params || {}).forEach(k => url.searchParams.set(k, typeof params[k] === 'object' ? JSON.stringify(params[k]) : params[k]));
+      let res, body;
+      try { res = await fetch(url.toString()); body = await res.json(); }
+      catch (e) { throw new Error('Could not reach the server. Please check your connection and try again.'); }
+      if (body && body.error === 'CODE_NOT_RECOGNISED') { const err = new Error('That code was not recognised. Please check it and try again.'); err.badCode = true; throw err; }
+      if (body && body.error) throw new Error(body.error);
+      return body;
+    }
+
+    // ---------- screens ----------
+    function render() {
+      const el = document.getElementById('app');
+      const s = state.screen;
+      let html = '';
+      if (state.error) html += `<div class="error" role="alert">${esc(state.error)}</div>`;
+      if (state.ok) html += `<div class="ok" role="status">${esc(state.ok)}</div>`;
+      if (s === 'signin') html += signinScreen();
+      else if (s === 'forgot') html += forgotScreen();
+      else if (s === 'home') html += homeScreen();
+      else if (s === 'request') html += requestScreen();
+      else if (s === 'sent') html += sentScreen();
+      else if (s === 'details') html += detailsScreen();
+      else if (s === 'contact') html += contactScreen();
+      else if (s === 'visits') html += visitsScreen();
+      el.innerHTML = html;
+      const first = el.querySelector('[autofocus]'); if (first) first.focus();
+    }
+
+    function signinScreen() {
+      return `<div class="card">
+        <h1>Sign in</h1>
+        <p class="muted">Type the six-character code for your church. You only need to do this once on each phone or computer.</p>
+        <label for="codeBox">Your church code</label>
+        <input id="codeBox" class="code-input" type="text" inputmode="latin" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="8" placeholder="ABC123" value="${esc(state.form.code || '')}" autofocus onkeydown="if(event.key==='Enter') signIn()">
+        <button class="btn" onclick="signIn()" ${state.busy ? 'disabled' : ''}>${state.busy ? 'Checking…' : 'Sign in'}</button>
+        <button class="btn quiet" onclick="go('forgot')">Forgotten your code?</button>
+      </div>`;
+    }
+
+    function forgotScreen() {
+      return `<div class="card">
+        <h1>Forgotten your code?</h1>
+        <p class="muted">Type the email address we have for your church (usually the organist or booking contact) and the code will be sent to it.</p>
+        <label for="emailBox">Email address</label>
+        <input id="emailBox" type="email" autocomplete="email" placeholder="name@example.org" value="${esc(state.form.email || '')}" autofocus onkeydown="if(event.key==='Enter') sendCode()">
+        <button class="btn" onclick="sendCode()" ${state.busy ? 'disabled' : ''}>${state.busy ? 'Sending…' : 'Send my code'}</button>
+        <button class="btn quiet" onclick="go('signin')">Back</button>
+      </div>`;
+    }
+
+    function homeScreen() {
+      const d = state.data; const c = d.customer;
+      const next = d.upcoming[0];
+      const months = (c.tuningMonths || []).slice().sort((a, b) => a - b).map(m => `<span class="month">${MONTHS[m]}</span>`).join('');
+      return `<div class="card">
+        <h1>${esc(c.name)}</h1>
+        <div class="row"><div class="main"><div class="muted small">Next visit</div>
+          ${next ? `<div class="when">${esc(niceDate(next.date))}</div><div>${esc(next.kind)} <span class="pill ${next.status === 'Done' ? 'done' : ''}">${esc(next.status)}</span></div>` : '<div>Nothing booked at the moment</div>'}
+        </div></div>
+        ${d.upcoming.length > 1 ? `<div class="row"><div class="main"><div class="muted small">Also booked</div>${d.upcoming.slice(1, 4).map(v => `<div>${esc(niceDate(v.date))} · ${esc(v.kind)} <span class="pill">${esc(v.status)}</span></div>`).join('')}</div></div>` : ''}
+        <div class="row"><div class="main"><div class="muted small">Regular tuning months</div><div>${months || '<span class="muted">Not set</span>'}</div></div></div>
+      </div>
+      <button class="btn" onclick="startRequest()">Request a visit</button>
+      <button class="btn secondary" onclick="go('visits')">Past visits</button>
+      <button class="btn secondary" onclick="go('details')">Your contacts and access notes</button>
+      ${d.requests.length ? `<div class="card" style="margin-top:14px"><h2>Your requests</h2>${d.requests.map(r => `<div class="row"><div class="main">${esc(r.description)}</div><span class="pill ${r.status === 'Visit booked' ? 'done' : ''}">${esc(r.status)}</span></div>`).join('')}</div>` : ''}
+      <button class="btn quiet" onclick="refresh()">Refresh</button>
+      <button class="btn quiet" onclick="signOut()">Sign out of this device</button>`;
+    }
+
+    function requestScreen() {
+      const f = state.form;
+      const kind = KINDS.find(k => k.id === f.kind);
+      const needsDetails = f.kind === 'fault' || f.kind === 'quote';
+      return `<div class="toprow"><button class="btn secondary" onclick="go('home')">‹ Back</button><h1 style="margin:0">Request a visit</h1></div>
+      <div class="card">
+        <h2>What do you need?</h2>
+        ${KINDS.map(k => `<button class="btn choice ${f.kind === k.id ? 'on' : ''}" onclick="pickKind('${k.id}')">${k.label}<small>${k.hint}</small></button>`).join('')}
+      </div>
+      ${kind ? `<div class="card">
+        <label for="details">${needsDetails ? 'Tell us about it' : 'Anything we should know? (optional)'}</label>
+        <textarea id="details" placeholder="${needsDetails ? (f.kind === 'fault' ? 'Which note, which stop, when it happens…' : 'What would you like a price for?') : 'Dates to avoid, a concert coming up, anything else…'}">${esc(f.details || '')}</textarea>
+        <div class="grid2">
+          <div><label for="who">Your name</label><input id="who" type="text" autocomplete="name" value="${esc(f.name || '')}"></div>
+          <div><label for="phone">Phone (optional)</label><input id="phone" type="tel" autocomplete="tel" value="${esc(f.phone || '')}"></div>
+        </div>
+        <button class="btn" onclick="sendRequest()" ${state.busy ? 'disabled' : ''}>${state.busy ? 'Sending…' : 'Send request'}</button>
+        <p class="muted small" style="margin-top:10px">Gary gets an email straight away and will be in touch to fix a date.</p>
+      </div>` : ''}`;
+    }
+
+    function sentScreen() {
+      return `<div class="card">
+        <h1>Sent</h1>
+        <p>Thank you. Your request has gone to Gary, who will be in touch about a date. It also shows under "Your requests" on your home page.</p>
+        <button class="btn" onclick="go('home')">Back to your home page</button>
+      </div>`;
+    }
+
+    function detailsScreen() {
+      const d = state.data;
+      return `<div class="toprow"><button class="btn secondary" onclick="go('home')">‹ Back</button><h1 style="margin:0">Your details</h1></div>
+      <div class="card">
+        <h2>People we deal with</h2>
+        <p class="muted small">Please keep these up to date when the organist or warden changes. The ⭐ is who we ring to book a visit.</p>
+        ${d.contacts.length === 0 ? '<p class="muted">No contacts yet.</p>' : d.contacts.map(c => `<div class="row">
+          <div class="main"><div><strong>${c.isBookingContact ? '⭐ ' : ''}${esc(c.name)}</strong>${c.role ? ` <span class="muted">· ${esc(c.role)}</span>` : ''}</div>
+          <div class="small">${[c.phone, c.mobile, c.email].filter(Boolean).map(esc).join(' · ') || '<span class="muted">no phone or email</span>'}</div></div>
+          <button class="btn secondary" style="width:auto;min-height:44px;padding:8px 14px;margin:0;font-size:16px" onclick="editContact('${esc(c.id)}')">Edit</button>
+        </div>`).join('')}
+        <button class="btn secondary" onclick="editContact('')">+ Add a person</button>
+      </div>
+      <div class="card">
+        <h2>Access notes</h2>
+        <p class="muted small">Where the key is, alarm arrangements, parking, anything that helps us get in. Only you and Gary can see this.</p>
+        <textarea id="accessNotes">${esc(d.customer.accessNotes || '')}</textarea>
+        <button class="btn" onclick="saveAccessNotes()" ${state.busy ? 'disabled' : ''}>${state.busy ? 'Saving…' : 'Save access notes'}</button>
+      </div>`;
+    }
+
+    function contactScreen() {
+      const f = state.form;
+      const isNew = !f.id;
+      return `<div class="toprow"><button class="btn secondary" onclick="go('details')">‹ Back</button><h1 style="margin:0">${isNew ? 'Add a person' : 'Edit'}</h1></div>
+      <div class="card">
+        <label for="cName">Name</label><input id="cName" type="text" autocomplete="name" value="${esc(f.name || '')}" autofocus>
+        <label for="cRole">Role</label>
+        <select id="cRole">${ROLES.map(r => `<option ${((f.role || '') === r) || (!ROLES.includes(f.role || '') && r === 'Other' && f.role) ? 'selected' : ''}>${r}</option>`).join('')}</select>
+        <div class="grid2">
+          <div><label for="cPhone">Phone</label><input id="cPhone" type="tel" value="${esc(f.phone || '')}"></div>
+          <div><label for="cMobile">Mobile</label><input id="cMobile" type="tel" value="${esc(f.mobile || '')}"></div>
+        </div>
+        <label for="cEmail">Email</label><input id="cEmail" type="email" autocomplete="email" value="${esc(f.email || '')}">
+        <label style="display:flex;align-items:center;gap:10px;margin-top:16px"><input id="cBooking" type="checkbox" style="width:24px;height:24px" ${f.isBookingContact ? 'checked' : ''}> ⭐ This is who to ring to book a visit</label>
+        <button class="btn" onclick="saveContact()" ${state.busy ? 'disabled' : ''}>${state.busy ? 'Saving…' : 'Save'}</button>
+        ${isNew ? '' : `<button class="btn danger" onclick="removeContact()">Remove this person</button>`}
+      </div>`;
+    }
+
+    function visitsScreen() {
+      const d = state.data;
+      return `<div class="toprow"><button class="btn secondary" onclick="go('home')">‹ Back</button><h1 style="margin:0">Past visits</h1></div>
+      <div class="card">
+        ${d.past.length === 0 ? '<p class="muted">No visits on record yet.</p>' : d.past.map(v => `<div class="row"><div class="main">
+          <div class="when">${esc(niceDate(v.date))} <span class="muted" style="font-weight:400">· ${esc(v.kind)}</span></div>
+          ${v.done.length ? `<div class="small">Fixed or checked:<ul class="plain">${v.done.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+          ${v.parts.length ? `<div class="small">Parts fitted: ${v.parts.map(esc).join(', ')}</div>` : ''}
+        </div><span class="pill ${v.status === 'Done' ? 'done' : 'warn'}">${esc(v.status)}</span></div>`).join('')}
+      </div>`;
+    }
+
+    // ---------- actions ----------
+    function go(screen) { state.screen = screen; state.error = ''; state.ok = ''; render(); window.scrollTo(0, 0); }
+
+    async function signIn() {
+      const code = (document.getElementById('codeBox').value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      state.form.code = code;
+      if (code.length < 6) { state.error = 'The code is six letters and numbers.'; render(); return; }
+      state.busy = true; state.error = ''; render();
+      try {
+        const data = await api('portalLogin', { code });
+        state.code = code; state.data = data; writeCode(code);
+        state.form = {}; state.busy = false; go('home');
+      } catch (e) { state.busy = false; state.error = e.message; render(); }
+    }
+
+    async function sendCode() {
+      const email = (document.getElementById('emailBox').value || '').trim();
+      state.form.email = email;
+      if (!email.includes('@')) { state.error = 'Please type an email address.'; render(); return; }
+      state.busy = true; state.error = ''; render();
+      try {
+        const r = await api('portalSendCode', { email });
+        state.busy = false; state.ok = r.message || 'Sent.'; state.screen = 'signin'; render();
+      } catch (e) { state.busy = false; state.error = e.message; render(); }
+    }
+
+    async function refresh() {
+      if (!state.code) return go('signin');
+      state.busy = true; render();
+      try { state.data = await api('portalGetData', { code: state.code }); state.busy = false; state.error = ''; render(); }
+      catch (e) { state.busy = false; if (e.badCode) { signOut(); state.error = 'Your code no longer works. Please sign in again or ask for a new code.'; render(); } else { state.error = e.message; render(); } }
+    }
+
+    function signOut() { writeCode(''); state = { screen: 'signin', code: '', data: null, busy: false, error: '', ok: '', form: {} }; render(); }
+
+    function startRequest() {
+      const booking = (state.data.contacts || []).find(c => c.isBookingContact) || {};
+      state.form = { kind: '', details: '', name: booking.name || '', phone: booking.phone || booking.mobile || '' };
+      go('request');
+    }
+    function grabRequestForm() {
+      const g = id => { const el = document.getElementById(id); return el ? el.value : undefined; };
+      if (g('details') !== undefined) state.form.details = g('details');
+      if (g('who') !== undefined) state.form.name = g('who');
+      if (g('phone') !== undefined) state.form.phone = g('phone');
+    }
+    function pickKind(id) { grabRequestForm(); state.form.kind = id; state.error = ''; render(); }
+    async function sendRequest() {
+      grabRequestForm();
+      const f = state.form;
+      if ((f.kind === 'fault' || f.kind === 'quote') && !f.details.trim()) { state.error = 'Please say a little about it so Gary knows what to bring.'; render(); return; }
+      state.busy = true; state.error = ''; render();
+      try {
+        await api('portalRequestVisit', { code: state.code, data: { kind: f.kind, details: f.details, name: f.name, phone: f.phone } });
+        state.busy = false; state.form = {};
+        try { state.data = await api('portalGetData', { code: state.code }); } catch (e) {}
+        go('sent');
+      } catch (e) { state.busy = false; state.error = e.message; render(); }
+    }
+
+    function editContact(id) {
+      const c = id ? state.data.contacts.find(x => x.id === id) : null;
+      state.form = c ? { ...c } : { id: '', name: '', role: 'Organist', phone: '', mobile: '', email: '', isBookingContact: false };
+      go('contact');
+    }
+    async function saveContact() {
+      const f = state.form;
+      f.name = document.getElementById('cName').value.trim();
+      f.role = document.getElementById('cRole').value;
+      f.phone = document.getElementById('cPhone').value.trim();
+      f.mobile = document.getElementById('cMobile').value.trim();
+      f.email = document.getElementById('cEmail').value.trim();
+      f.isBookingContact = document.getElementById('cBooking').checked;
+      if (!f.name) { state.error = 'Please type a name.'; render(); return; }
+      state.busy = true; state.error = ''; render();
+      try {
+        await api('portalSaveContact', { code: state.code, data: f });
+        state.data = await api('portalGetData', { code: state.code });
+        state.busy = false; state.form = {}; go('details'); state.ok = 'Saved.'; render();
+      } catch (e) { state.busy = false; state.error = e.message; render(); }
+    }
+    function removeContact() {
+      const f = state.form;
+      askConfirm(`Remove ${f.name} from your contacts?`, 'Remove', async () => {
+        state.busy = true; render();
+        try {
+          await api('portalRemoveContact', { code: state.code, data: { contactId: f.id } });
+          state.data = await api('portalGetData', { code: state.code });
+          state.busy = false; state.form = {}; go('details'); state.ok = 'Removed.'; render();
+        } catch (e) { state.busy = false; state.error = e.message; render(); }
+      });
+    }
+    async function saveAccessNotes() {
+      const notes = document.getElementById('accessNotes').value;
+      state.busy = true; state.error = ''; render();
+      try {
+        await api('portalSaveAccessNotes', { code: state.code, data: { accessNotes: notes } });
+        state.data.customer.accessNotes = notes;
+        state.busy = false; state.ok = 'Access notes saved.'; render();
+      } catch (e) { state.busy = false; state.error = e.message; render(); }
+    }
+
+    function askConfirm(message, label, onYes) {
+      const host = document.getElementById('confirmHost');
+      host.innerHTML = `<div class="confirm-overlay"><div class="confirm"><p style="font-size:19px">${esc(message)}</p>
+        <button class="btn danger" id="confirmYes">${esc(label)}</button><button class="btn quiet" id="confirmNo">Cancel</button></div></div>`;
+      document.getElementById('confirmNo').onclick = () => { host.innerHTML = ''; };
+      document.getElementById('confirmYes').onclick = () => { host.innerHTML = ''; onYes(); };
+    }
+
+    // ---------- start ----------
+    (async function start() {
+      const pl = document.getElementById('privacyLink');
+      if (PRIVACY_URL) pl.href = PRIVACY_URL; else pl.parentNode.removeChild(pl.previousSibling), pl.parentNode.removeChild(pl);
+      // a link like portal.html?code=ABC123 fills the box in
+      const fromLink = new URLSearchParams(location.search).get('code');
+      if (fromLink) { try { history.replaceState(null, '', location.pathname); } catch (e) {} } // keep the code out of the address bar and history
+      const saved = fromLink || readCode();
+      if (saved) {
+        state.busy = true; state.form.code = saved; render();
+        try { state.data = await api('portalLogin', { code: saved }); state.code = saved.toUpperCase(); writeCode(state.code); state.busy = false; state.form = {}; go('home'); }
+        catch (e) { state.busy = false; state.error = e.badCode ? 'Your saved code no longer works. Please sign in again.' : e.message; if (e.badCode) writeCode(''); render(); }
+      } else {
+        render();
+      }
+    })();
+  </script>
+</body>
+</html>
