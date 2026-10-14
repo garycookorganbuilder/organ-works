@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Site Tracker · 13 Oct 2026 (e) · three end-of-visit questions; open tickets shown at the visit; changes kept on the phone until confirmed; access key -->
+<!-- Site Tracker · 14 Oct 2026 (f) · access notes from the portal shown on the visit; three end-of-visit questions; open tickets shown at the visit; changes kept on the phone until confirmed; access key -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -1062,6 +1062,9 @@
         
         if (customer.distance) {
           html += `<div class="distance">📍 ${customer.distance} miles from workshop</div>`;
+        }
+        if (customer.accessNotes) {
+          html += `<div class="job-notes">🔑 ${escapeHtml(customer.accessNotes)}</div>`;
         }
         
         if (booking.notes) {
