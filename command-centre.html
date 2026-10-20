@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Command Centre · 14 Oct 2026 (f3) · New ticket, Days off and New big job buttons at the top; edit a church's name, address, rate and distance; customer portal (codes, visible tickets, access notes); opens on the week; day/week/month/year; Needs you list; Undo; calm view; one word for each thing -->
+<!-- Command Centre · 20 Oct 2026 (h) · left panel in three tabs: Tickets, Tunings to book, Big jobs (opens on Tickets; amber count when something is overdue or new from the portal) · New ticket, Days off and New big job buttons at the top; edit a church's name, address, rate and distance; customer portal (codes, visible tickets, access notes); opens on the week; day/week/month/year; Needs you list; Undo; calm view; one word for each thing -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -173,7 +173,8 @@ const CommandCentre = () => {
   // Screen size: narrow = tablet (two tabs instead of side by side); compact = smaller calendar cells
   const [isNarrow, setIsNarrow] = useState(window.innerWidth < 1450);
   const [isCompact, setIsCompact] = useState(window.innerWidth < 1700);
-  const [plannerTab, setPlannerTab] = useState('calendar');   // 'calendar' | 'todo' (narrow screens only)
+  const [plannerTab, setPlannerTab] = useState('calendar');
+  const [leftTab, setLeftTab] = useState('tickets');          // left panel tab: 'tickets' | 'tunings' | 'bigjobs' (always opens on Tickets)   // 'calendar' | 'todo' (narrow screens only)
   const [plannerView, setPlannerView] = useState('week');     // 'day' | 'week' | 'month' | 'year' - always opens on the week
   const [showPastMonths, setShowPastMonths] = useState(null); // null = automatic (hidden on a tablet, shown on a wide screen)
 
@@ -3080,6 +3081,18 @@ const CommandCentre = () => {
   const openTicketCount = tickets.filter(t => t.status === 'new').length;
   const todoCount = needs.notDone.length + needs.toConfirm.length + needs.toInvoice.length + needs.toBePaid.length + openTicketCount + jobsDue.length;
 
+  // Left panel tabs: Tickets (visits waiting + tickets) · Tunings to book · Big jobs
+  const ticketsTabCount = needs.notDone.length + needs.toConfirm.length + needs.toInvoice.length + needs.toBePaid.length + openTicketCount;
+  const ticketsTabAlert = needs.notDone.length > 0 || tickets.some(t => t.status === 'new' && (isPortalTicket(t) || (t.dueDate && String(t.dueDate) < todayForNeeds)));
+  const tuningsTabAlert = jobsDue.some(j => j.urgent);
+  // Whatever is being worked on decides the tab, so a form never sits hidden in another tab
+  const shownTab = (allocatingProject || showNewProject) ? 'bigjobs' : showAddTicket ? 'tickets' : leftTab;
+  const leftTabs = [
+    { key: 'tickets', label: 'Tickets', count: ticketsTabCount, alert: ticketsTabAlert },
+    { key: 'tunings', label: 'Tunings to book', count: jobsDue.length, alert: tuningsTabAlert },
+    { key: 'bigjobs', label: 'Big jobs', count: activeProjects.length, alert: false },
+  ];
+
   // Open a day from the list (on a tablet, jump to the calendar tab first)
   const goToDay = (dateStr) => { setCurrentDate(parseLocalDate(dateStr)); setPlannerTab('calendar'); setSelectedDay(dateStr); };
 
@@ -3164,13 +3177,28 @@ const CommandCentre = () => {
             {!isNarrow && bookingBox}
             {!isNarrow && offBlockBox}
             
-            <h2 className="text-xl font-bold mb-3">Needs you ({todoCount})</h2>
             {!showAddTicket && !selectedCustomerToBook && !allocatingProject && (
               <div className="grid grid-cols-2 gap-2 mb-4">
-                <button onClick={() => setShowAddTicket(true)} className="py-3 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg font-medium touch-target border-2 border-red-300">+ New ticket</button>
+                <button onClick={() => { setShowAddTicket(true); setLeftTab('tickets'); }} className="py-3 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg font-medium touch-target border-2 border-red-300">+ New ticket</button>
                 {!blockMode && <button onClick={() => startBlock('off')} className="py-3 bg-yellow-100 hover:bg-yellow-200 text-yellow-900 rounded-lg font-medium touch-target border-2 border-yellow-400">🏖️ Days off</button>}
               </div>
             )}
+            <div className="grid grid-cols-3 gap-2 mb-4" role="tablist" data-left-tabs>
+              {leftTabs.map(tab => {
+                const on = shownTab === tab.key;
+                const countColour = tab.alert && tab.count > 0 ? (on ? 'bg-amber-400 text-gray-900' : 'bg-amber-400 text-gray-900') : (on ? 'bg-white text-gray-800' : 'bg-gray-200 text-gray-700');
+                return (
+                  <button key={tab.key} role="tab" aria-selected={on} data-tab={tab.key} onClick={() => { setLeftTab(tab.key); setShowAddTicket(false); }}
+                    disabled={!!allocatingProject || showNewProject || showAddTicket}
+                    className={`flex flex-col items-center justify-center gap-1 px-1 py-2 rounded-lg font-bold touch-target border-2 leading-tight ${on ? 'bg-gray-800 text-white border-gray-800' : 'bg-white text-gray-800 border-gray-300'} disabled:opacity-60`}>
+                    <span className="text-sm text-center">{tab.label}</span>
+                    <span className={`text-base min-w-8 px-2 rounded-full ${countColour}`}>{tab.count}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {shownTab === 'tickets' && (<>
             {showAddTicket && (
               <div className="mb-4 bg-yellow-50 p-3 rounded-lg">
                 <div className="font-bold mb-2">New ticket</div>
@@ -3197,7 +3225,7 @@ const CommandCentre = () => {
                 </div>
               </div>
             )}
-            {todoCount === 0 && <div className="text-center py-6 text-gray-500 text-lg">Nothing needs you right now.</div>}
+            {ticketsTabCount === 0 && !showAddTicket && <div className="text-center py-6 text-gray-500 text-lg">Nothing here.</div>}
             {renderNeedGroup('notDone', 'Did this happen?', needs.notDone, '✓ Done', b => updateBookingStatus(b.id, 'completed'))}
             {renderNeedGroup('toConfirm', 'To confirm', needs.toConfirm, '✓ Confirm', b => updateBookingStatus(b.id, 'confirmed'))}
             {renderNeedGroup('toInvoice', 'To invoice', needs.toInvoice, 'Invoice', b => openInvoiceCalc(b))}
@@ -3242,7 +3270,10 @@ const CommandCentre = () => {
               );
             })()}
             
-            {jobsDue.length > 0 && <h3 className="font-bold text-gray-700 mb-2">Tunings to book ({jobsDue.length})</h3>}
+            </>)}
+
+            {shownTab === 'tunings' && (<>
+            {jobsDue.length === 0 && <div className="text-center py-6 text-gray-500 text-lg">Nothing here.</div>}
             <div className="space-y-2 mb-4">
               {jobsDue.length === 0 ? null : (() => {
                 // Group jobs by tuningGroup
@@ -3301,14 +3332,11 @@ const CommandCentre = () => {
                 });
               })()}
             </div>
-            
-
-
-            <div className="border-b-2 mb-4 mt-4"></div>
+            </>)}
 
             {/* Big Jobs */}
+            {shownTab === 'bigjobs' && (
             <div className="mb-4">
-              <h2 className="text-xl font-bold mb-2">Big jobs</h2>
               
               {!showNewProject && !allocatingProject && (
                 <button onClick={() => setShowNewProject(true)} className="w-full py-3 mb-3 bg-purple-100 hover:bg-purple-200 text-purple-700 rounded-lg font-medium touch-target border-2 border-purple-300">+ New big job</button>
@@ -3357,6 +3385,8 @@ const CommandCentre = () => {
                 </div>
               )}
               
+              {!showNewProject && !allocatingProject && activeProjects.length === 0 && <div className="text-center py-6 text-gray-500 text-lg">Nothing here.</div>}
+
               {!showNewProject && !allocatingProject && completedProjects.length > 0 && (
                 <div className="mt-3">
                   <button onClick={() => setShowCompletedProjects(!showCompletedProjects)} className="w-full py-3 text-sm text-gray-600 bg-gray-100 rounded-lg touch-target">{showCompletedProjects ? 'Hide' : 'Show'} completed big jobs ({completedProjects.length})</button>
@@ -3372,6 +3402,7 @@ const CommandCentre = () => {
                 </div>
               )}
             </div>
+            )}
           </div>
           <div className={isNarrow ? (plannerTab === 'calendar' || activeBox ? '' : 'hidden') : "flex-1 min-w-0 flex flex-col"}>
             {isNarrow && activeBox && <div className="sticky top-0 z-30 no-print">{activeBox}</div>}
