@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Site Tracker · 14 Oct 2026 (f) · access notes from the portal shown on the visit; three end-of-visit questions; open tickets shown at the visit; changes kept on the phone until confirmed; access key -->
+<!-- Site Tracker · 20 Oct 2026 (h) · 📌 things to take back (tick Returned), 🔧 Took something away, end-of-visit asks about both · access notes from the portal shown on the visit; three end-of-visit questions; open tickets shown at the visit; changes kept on the phone until confirmed; access key -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -474,6 +474,20 @@
       margin: 12px 0;
     }
     
+    .take-back {
+      background: rgba(168, 85, 247, 0.14);
+      border: 2px solid #a855f7;
+      border-radius: 12px;
+      padding: 12px;
+      margin: 12px 0;
+    }
+    .take-back .while-there-title { color: #d8b4fe; }
+    .take-back .away { color: #c4b5fd; }
+    .btn-away {
+      background: #7c3aed;
+      color: white;
+    }
+
     .while-there-title {
       font-size: 14px;
       font-weight: bold;
@@ -750,6 +764,9 @@
     }
     
     const TICKET_ICONS = { tuning: '🎹', fault: '⚠️', quote: '💰', reminder: '🔔', 'part-return': '🔧', 'follow-up': '📞' };
+    // Parts away for repair / things to take: shown on their own, not as ordinary tickets
+    function isRepairItem(t) { return t.repairStage === 'away' || t.repairStage === 'ready'; }
+    function repairItemsFor(customerId) { return tickets.filter(t => t.customerId === customerId && isRepairItem(t)); }
     
     function isValidTime(value) {
       return !!value && value !== '' && !isNaN(new Date(value).getTime());
@@ -909,6 +926,14 @@
       loadPending().forEach(item => {
         if (item.action === 'updateTicket' && item.params && item.params.data && item.params.data.status === 'closed') {
           tickets = tickets.filter(t => t.id !== item.params.data.id);
+          return;
+        }
+        if (item.action === 'repairAction' && item.params && item.params.data) {
+          const d = item.params.data;
+          if (d.op === 'returned') tickets = tickets.filter(t => t.id !== d.ticketId);
+          if (d.op === 'add' && d.tempId && !tickets.some(t => t.id === d.tempId)) {
+            tickets.push({ id: d.tempId, customerId: d.customerId, description: d.description, status: 'new', type: 'part-return', repairKind: d.kind, repairStage: d.kind === 'take' ? 'ready' : 'away' });
+          }
           return;
         }
         if (item.action !== 'updateBooking' || !item.params || !item.params.data) return;
@@ -1072,7 +1097,22 @@
         }
         
         // Open tickets for this customer: things to do or check while here
-        const openTickets = tickets.filter(t => t.customerId === booking.customerId);
+        const openTickets = tickets.filter(t => t.customerId === booking.customerId && !isRepairItem(t));
+        const repairItems = repairItemsFor(booking.customerId);
+        if (repairItems.length > 0) {
+          html += `<div class="take-back"><div class="while-there-title">📌 Take with you / put back</div>`;
+          repairItems.forEach(t => {
+            if (t.repairStage === 'ready') {
+              html += `<div class="while-there-item">
+                <span>📌 ${escapeHtml(t.description)}</span>
+                ${String(t.id).indexOf('temp_') === 0 ? '' : `<button onclick="markReturned('${escapeHtml(t.id)}', '${escapeHtml(booking.id)}')">✓ Returned</button>`}
+              </div>`;
+            } else {
+              html += `<div class="while-there-item away"><span>🔧 Still away for repair: ${escapeHtml(t.description)}</span></div>`;
+            }
+          });
+          html += `</div>`;
+        }
         if (openTickets.length > 0) {
           html += `<div class="while-there"><div class="while-there-title">📋 While you're here</div>`;
           openTickets.forEach(t => {
@@ -1112,9 +1152,11 @@
         } else if (isActive) {
           html += `<button class="btn btn-stop" onclick="stopJob('${booking.id}')">⏹️ FINISHED</button>`;
           html += `<button class="btn btn-ticket" onclick="openTicketModal('${booking.customerId}', '${customer.name.replace(/'/g, "\\'")}')">📋 New ticket</button>`;
+          html += `<button class="btn btn-away" onclick="tookAway('${escapeHtml(booking.customerId)}')">🔧 Took something away</button>`;
         } else {
           html += `<button class="btn btn-done" disabled>✓ Complete</button>`;
           html += `<button class="btn btn-ticket" onclick="openTicketModal('${booking.customerId}', '${customer.name.replace(/'/g, "\\'")}')">📋 New ticket</button>`;
+          html += `<button class="btn btn-away" onclick="tookAway('${escapeHtml(booking.customerId)}')">🔧 Took something away</button>`;
         }
         
         // Materials section (show when active or completed)
@@ -1260,13 +1302,18 @@
     
     // ------------------------------------------------------------
     // End-of-visit questions
-    // Three questions, one at a time, so nothing is left to memory.
+    // A few questions, one at a time, so nothing is left to memory.
     // ------------------------------------------------------------
     
-    let wrap = null; // { bookingId, step, mode }
+    let wrap = null; // { bookingId, step, mode, steps }
     
     function startWrapUp(bookingId) {
-      wrap = { bookingId: bookingId, step: 1, mode: 'ask' };
+      const booking = bookings.find(b => b.id === bookingId);
+      const toReturn = booking ? repairItemsFor(booking.customerId).filter(t => t.repairStage === 'ready' && String(t.id).indexOf('temp_') !== 0) : [];
+      const steps = ['materials'];
+      if (toReturn.length > 0) steps.push('returned');
+      steps.push('tookAway', 'ticket', 'followUp');
+      wrap = { bookingId: bookingId, step: 1, mode: 'ask', steps: steps };
       renderWrapUp();
       document.getElementById('wrapModal').classList.add('active');
     }
@@ -1281,13 +1328,15 @@
       if (!wrap) return;
       wrap.step += 1;
       wrap.mode = 'ask';
-      if (wrap.step > 3) { wrap.step = 4; }
+      if (wrap.step > wrap.steps.length) { wrap.step = wrap.steps.length + 1; }
       renderWrapUp();
     }
     
     function wrapYes() {
       if (!wrap) return;
-      if (wrap.step === 3) { wrapSaveFollowUp(); return; }
+      const key = wrap.steps[wrap.step - 1];
+      if (key === 'followUp') { wrapSaveFollowUp(); return; }
+      if (key === 'returned') { wrapReturnAll(); return; }
       wrap.mode = 'form';
       renderWrapUp();
     }
@@ -1303,27 +1352,31 @@
       const el = document.getElementById('wrapContent');
       const booking = bookings.find(b => b.id === wrap.bookingId);
       const customer = booking ? getCustomerById(booking.customerId) : { name: '' };
+      const toReturn = booking ? repairItemsFor(booking.customerId).filter(t => t.repairStage === 'ready' && String(t.id).indexOf('temp_') !== 0) : [];
       const questions = {
-        1: 'Did you use any materials or parts?',
-        2: 'Is there anything to fix or check next time?',
-        3: 'Does this customer need another visit booking?'
+        materials: 'Did you use any materials or parts?',
+        returned: 'Did you put back: ' + toReturn.map(t => escapeHtml(t.description)).join(', ') + '?',
+        tookAway: 'Did you take anything away to repair?',
+        ticket: 'Is there anything to fix or check next time?',
+        followUp: 'Does this customer need another visit booking?'
       };
+      const key = wrap.steps[wrap.step - 1];
       
-      if (wrap.step >= 4) {
+      if (wrap.step > wrap.steps.length) {
         el.innerHTML = `<div class="wrap-question">✓ All done for ${escapeHtml(customer.name)}.</div>
           <div class="wrap-choices"><button class="wrap-yes" onclick="if (wrapTapOk()) closeWrapUp()">Close</button></div>`;
         return;
       }
       
-      let html = `<div class="wrap-step">Before you go · ${wrap.step} of 3</div>`;
-      html += `<div class="wrap-question">${questions[wrap.step]}</div>`;
+      let html = `<div class="wrap-step">Before you go · ${wrap.step} of ${wrap.steps.length}</div>`;
+      html += `<div class="wrap-question">${questions[key]}</div>`;
       
       if (wrap.mode === 'ask') {
         html += `<div class="wrap-choices">
           <button class="wrap-no" onclick="if (wrapTapOk()) wrapNext()">No</button>
           <button class="wrap-yes" onclick="if (wrapTapOk()) wrapYes()">Yes</button>
         </div>`;
-      } else if (wrap.step === 1) {
+      } else if (key === 'materials') {
         const materials = bookingMaterials[wrap.bookingId] || [];
         html += `<div class="wrap-form">`;
         if (materials.length > 0) {
@@ -1342,7 +1395,15 @@
             <button class="wrap-yes" onclick="wrapAddMaterial(true)">Save and go on</button>
           </div>
         </div>`;
-      } else if (wrap.step === 2) {
+      } else if (key === 'tookAway') {
+        html += `<div class="wrap-form">
+          <textarea id="wrapAwayText" placeholder="What did you take? (e.g. Trumpet C#3 pipe – split seam)"></textarea>
+          <div class="wrap-choices">
+            <button class="wrap-no" onclick="wrapSaveTookAway(false)">Add another</button>
+            <button class="wrap-yes" onclick="wrapSaveTookAway(true)">Save and go on</button>
+          </div>
+        </div>`;
+      } else if (key === 'ticket') {
         html += `<div class="wrap-form">
           <select id="wrapTicketType">
             <option value="fault">⚠️ Fault</option>
@@ -1409,6 +1470,29 @@
       }
     }
     
+    async function wrapReturnAll() {
+      if (!wrap) return;
+      const booking = bookings.find(b => b.id === wrap.bookingId);
+      const toReturn = booking ? repairItemsFor(booking.customerId).filter(t => t.repairStage === 'ready' && String(t.id).indexOf('temp_') !== 0) : [];
+      wrapNext();
+      for (const t of toReturn) await markReturned(t.id, booking.id);
+    }
+
+    async function wrapSaveTookAway(goOn) {
+      if (!wrap) return;
+      const description = document.getElementById('wrapAwayText').value.trim();
+      const booking = bookings.find(b => b.id === wrap.bookingId);
+      if (description && booking) {
+        const sending = addRepairItem(booking.customerId, description, 'repair');
+        if (goOn) wrapNext(); else renderWrapUp();
+        await sending;
+      } else if (goOn) {
+        wrapNext();
+      } else {
+        alert('Type what you took away.');
+      }
+    }
+
     async function wrapSaveFollowUp() {
       if (!wrap) return;
       const booking = bookings.find(b => b.id === wrap.bookingId);
@@ -1578,6 +1662,30 @@
     }
     
     // Mark a ticket as done. It leaves the list but stays in the sheet (status "closed").
+    // ------------------------------------------------------------
+    // Parts away for repair, and things to take back
+    // ------------------------------------------------------------
+    async function addRepairItem(customerId, description, kind) {
+      const tempId = 'temp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      tickets.push({ id: tempId, customerId: customerId, description: description, status: 'new', type: 'part-return', repairKind: kind, repairStage: kind === 'take' ? 'ready' : 'away' });
+      saveCache();
+      renderBookings();
+      await send('repairAction', { data: { op: 'add', customerId: customerId, description: description, kind: kind, tempId: tempId } });
+    }
+
+    async function tookAway(customerId) {
+      const description = (prompt('What did you take away to repair?\n(e.g. Trumpet C#3 pipe – split seam)') || '').trim();
+      if (!description) return;
+      await addRepairItem(customerId, description, 'repair');
+    }
+
+    async function markReturned(ticketId, bookingId) {
+      tickets = tickets.filter(t => t.id !== ticketId);
+      saveCache();
+      renderBookings();
+      await send('repairAction', { data: { op: 'returned', ticketId: ticketId, bookingId: bookingId } });
+    }
+
     async function closeTicket(ticketId) {
       tickets = tickets.filter(t => t.id !== ticketId);
       saveCache();
