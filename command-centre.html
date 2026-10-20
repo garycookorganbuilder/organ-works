@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Command Centre · 20 Oct 2026 (h3) · linked tickets (same trip, ticket to ticket or ticket to tuning, booked together; travel chosen on the invoice) · parts away for repair, bench timer, Repaired with charge, Take next visit (📌), repair lines on the invoice · left panel in three tabs: Tickets, Tunings to book, Big jobs (opens on Tickets; amber count when something is overdue or new from the portal) · New ticket, Days off and New big job buttons at the top; edit a church's name, address, rate and distance; customer portal (codes, visible tickets, access notes); opens on the week; day/week/month/year; Needs you list; Undo; calm view; one word for each thing -->
+<!-- Command Centre · 20 Oct 2026 (i) · each part of the planner scrolls on its own; big job shows days done and to come · linked tickets (same trip, ticket to ticket or ticket to tuning, booked together; travel chosen on the invoice) · parts away for repair, bench timer, Repaired with charge, Take next visit (📌), repair lines on the invoice · left panel in three tabs: Tickets, Tunings to book, Big jobs (opens on Tickets; amber count when something is overdue or new from the portal) · New ticket, Days off and New big job buttons at the top; edit a church's name, address, rate and distance; customer portal (codes, visible tickets, access notes); opens on the week; day/week/month/year; Needs you list; Undo; calm view; one word for each thing -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -32,6 +32,9 @@
       .print-container { max-height: none !important; max-width: none !important; box-shadow: none !important; border-radius: 0 !important; }
       .print-content { overflow: visible !important; }
     }
+    /* Planner: the page stays still and each column scrolls on its own */
+    @media print { .app-root { height: auto !important; overflow: visible !important; } .scroll-col { overflow: visible !important; max-height: none !important; } }
+    .scroll-col { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
     .scroll-panel { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
     .scroll-panel::-webkit-scrollbar { width: 6px; }
     .scroll-panel::-webkit-scrollbar-track { background: transparent; }
@@ -2654,7 +2657,7 @@ const CommandCentre = () => {
 
     return (
       <div className={embedded ? "contents" : isNarrow ? "fixed inset-0 bg-black bg-opacity-40 z-40 flex justify-end" : "contents"} onClick={!embedded && isNarrow ? onClose : undefined}>
-      <div onClick={(e) => e.stopPropagation()} className={embedded ? "day-view bg-white rounded-lg shadow p-5 flex flex-col w-full max-w-3xl" : isNarrow ? "w-full max-w-md h-full bg-white shadow-xl p-5 flex flex-col" : "w-96 flex-shrink-0 bg-white rounded-lg shadow-xl p-5 flex flex-col max-h-[calc(100vh-160px)]"}>
+      <div onClick={(e) => e.stopPropagation()} className={embedded ? "day-view bg-white rounded-lg shadow p-5 flex flex-col w-full max-w-3xl" : isNarrow ? "w-full max-w-md h-full bg-white shadow-xl p-5 flex flex-col" : "w-96 flex-shrink-0 bg-white rounded-lg shadow-xl p-5 flex flex-col min-h-0 overflow-y-auto scroll-panel scroll-col"} data-col={!embedded && !isNarrow ? 'right' : undefined}>
         {embedded && (selectedCustomerToBook || allocatingProject) && !isOff && isWorkDay(year, month - 1, day) && (
           <button onClick={() => handleDayClick(date, year, month - 1, day)} className="w-full mb-4 py-4 rounded-lg border-2 border-dashed border-green-500 text-green-700 text-lg font-bold touch-target flex-shrink-0">👆 Book {allocatingProject ? allocatingProject.name : selectedCustomerToBook.name} on this day</button>
         )}
@@ -3025,6 +3028,16 @@ const CommandCentre = () => {
     const [editNotes, setEditNotes] = useState(project.notes || '');
     const [editYearStart, setEditYearStart] = useState(project.yearStart || project.targetYear || currentYear);
     const [editYearEnd, setEditYearEnd] = useState(project.yearEnd || project.targetYear || currentYear);
+    const [showDays, setShowDays] = useState(false);
+    // Booked days split into done (before today) and still to come (today onwards)
+    const todayStrForJob = todayStrNow();
+    const sortedDays = [...(project.days || [])].map(String).sort();
+    const daysDone = sortedDays.filter(d => d < todayStrForJob);
+    const daysToCome = sortedDays.filter(d => d >= todayStrForJob);
+    const est = parseInt(project.estimatedDays) || 0;
+    const stillToPlace = est ? Math.max(0, est - sortedDays.length) : 0;
+    const dayLine = (d) => parseLocalDate(d).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+    const openDay = (d) => { onClose(); goToDay(d); };
     
     const hourlyRate = 45;
     const labourCost = project.totalHours * hourlyRate;
@@ -3090,12 +3103,39 @@ const CommandCentre = () => {
             </div>
           )}
           
-          <div className="grid grid-cols-3 gap-4 mb-6">
-            <div className="bg-purple-100 rounded-lg p-4 text-center">
-              <div className="text-3xl font-bold text-purple-700">{project.days.length}</div>
-              <div className="text-sm text-purple-600">Days booked</div>
-              {project.estimatedDays && <div className="text-xs text-purple-500">of {project.estimatedDays} est.</div>}
+          <div className="bg-purple-50 border-2 border-purple-200 rounded-lg p-4 mb-4" data-job-days>
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div><div className="text-3xl font-bold text-gray-700">{daysDone.length}</div><div className="text-sm text-gray-600">Days done</div></div>
+              <div><div className="text-3xl font-bold text-purple-700">{daysToCome.length}</div><div className="text-sm text-purple-700">Days to come</div></div>
+              <div><div className="text-3xl font-bold text-gray-700">{est || '–'}</div><div className="text-sm text-gray-600">Estimated</div></div>
             </div>
+            {est > 0 && (
+              <div className="mt-3">
+                <div className="h-3 rounded-full bg-white border border-purple-200 overflow-hidden flex">
+                  <div className="bg-gray-500" style={{ width: `${Math.min(100, daysDone.length / Math.max(est, sortedDays.length) * 100)}%` }}></div>
+                  <div className="bg-purple-400" style={{ width: `${Math.min(100, daysToCome.length / Math.max(est, sortedDays.length) * 100)}%` }}></div>
+                </div>
+                <div className="text-sm text-gray-600 mt-1">{stillToPlace > 0 ? `${stillToPlace} day${stillToPlace === 1 ? '' : 's'} still to place in the diary` : sortedDays.length > est ? `${sortedDays.length - est} day${sortedDays.length - est === 1 ? '' : 's'} more than estimated` : 'All estimated days are in the diary'}</div>
+              </div>
+            )}
+            <button onClick={() => setShowDays(!showDays)} className="w-full mt-3 py-3 bg-white border-2 border-purple-300 text-purple-800 font-bold rounded-lg touch-target" data-show-days>{showDays ? 'Hide the days' : '📅 Show the days'}</button>
+            {showDays && (
+              <div className="grid grid-cols-2 gap-3 mt-3">
+                <div>
+                  <div className="font-bold text-gray-700 mb-1">Done ({daysDone.length})</div>
+                  {daysDone.length === 0 && <div className="text-sm text-gray-500">None yet</div>}
+                  {daysDone.map(d => <button key={d} onClick={() => openDay(d)} className="w-full text-left text-sm py-2 px-2 mb-1 rounded bg-white border border-gray-200 text-gray-600 touch-target">✓ {dayLine(d)}</button>)}
+                </div>
+                <div>
+                  <div className="font-bold text-purple-800 mb-1">To come ({daysToCome.length})</div>
+                  {daysToCome.length === 0 && <div className="text-sm text-gray-500">None booked</div>}
+                  {daysToCome.map(d => <button key={d} onClick={() => openDay(d)} className={`w-full text-left text-sm py-2 px-2 mb-1 rounded border touch-target ${d === todayStrForJob ? 'bg-purple-600 text-white border-purple-600 font-bold' : 'bg-white border-purple-200'}`}>{d === todayStrForJob ? '▶ Today · ' : ''}{dayLine(d)}</button>)}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 mb-6">
             <div className="bg-blue-100 rounded-lg p-4 text-center">
               <div className="text-3xl font-bold text-blue-700">{project.totalHours.toFixed(1)}</div>
               <div className="text-sm text-blue-600">Hours Tracked</div>
@@ -3520,7 +3560,7 @@ const CommandCentre = () => {
   // ============================================================
   
   return (
-    <div className={`min-h-screen bg-gray-100 p-3 flex flex-col ${calm ? 'calm' : ''}`}>
+    <div className={`app-root bg-gray-100 p-3 flex flex-col ${view === 'planner' ? 'h-screen overflow-hidden' : 'min-h-screen'} ${calm ? 'calm' : ''}`} style={view === 'planner' ? { height: '100dvh' } : undefined}>
       {loadError && (
         <div className="bg-red-100 border-2 border-red-400 text-red-800 rounded-lg p-4 mb-3 flex flex-wrap items-center justify-between gap-3">
           <div className="font-medium">Could not load your data: {loadError}</div>
@@ -3559,16 +3599,16 @@ const CommandCentre = () => {
 
       {/* Main Content */}
       {view === 'planner' && (
-        <div className={isNarrow ? "flex-1" : "flex gap-3 flex-1 min-h-0"}>
+        <div className={isNarrow ? "flex-1 min-h-0 flex flex-col" : "flex gap-3 flex-1 min-h-0"}>
           {/* TABS (tablet only). Hidden while something is being placed on the calendar. */}
           {isNarrow && !activeBox && (
-            <div className="grid grid-cols-2 gap-2 mb-3 no-print">
+            <div className="grid grid-cols-2 gap-2 mb-3 no-print flex-shrink-0">
               <button onClick={() => setPlannerTab('calendar')} className={`py-3 rounded-lg text-lg font-bold touch-target ${plannerTab === 'calendar' ? 'bg-gray-800 text-white' : 'bg-white'}`}>📅 Calendar</button>
               <button onClick={() => setPlannerTab('todo')} className={`py-3 rounded-lg text-lg font-bold touch-target ${plannerTab === 'todo' ? 'bg-gray-800 text-white' : 'bg-white'}`}>Needs you ({todoCount})</button>
             </div>
           )}
           {/* LEFT PANEL */}
-          <div className={isNarrow ? `bg-white rounded-lg shadow-xl p-4 no-print max-w-3xl mx-auto ${plannerTab === 'todo' && !activeBox ? '' : 'hidden'}` : "w-80 flex-shrink-0 bg-white rounded-lg shadow-xl p-4 no-print overflow-y-auto scroll-panel"} style={isNarrow ? {} : {maxHeight: 'calc(100vh - 160px)'}}>
+          <div className={isNarrow ? `bg-white rounded-lg shadow-xl p-4 no-print w-full max-w-3xl mx-auto flex-1 min-h-0 overflow-y-auto scroll-panel scroll-col ${plannerTab === 'todo' && !activeBox ? '' : 'hidden'}` : "w-80 flex-shrink-0 bg-white rounded-lg shadow-xl p-4 no-print min-h-0 overflow-y-auto scroll-panel scroll-col"} data-col="left">
             {!isNarrow && bookingBox}
             {!isNarrow && offBlockBox}
             
@@ -3871,7 +3911,7 @@ const CommandCentre = () => {
             </div>
             )}
           </div>
-          <div className={isNarrow ? (plannerTab === 'calendar' || activeBox ? '' : 'hidden') : "flex-1 min-w-0 flex flex-col"}>
+          <div className={isNarrow ? (plannerTab === 'calendar' || activeBox ? 'flex-1 min-h-0 overflow-y-auto scroll-panel scroll-col' : 'hidden') : "flex-1 min-w-0 min-h-0 flex flex-col overflow-y-auto scroll-panel scroll-col"} data-col="planner">
             {isNarrow && activeBox && <div className="sticky top-0 z-30 no-print">{activeBox}</div>}
             {plannerToolbar}
             {plannerView === 'year' && !(isNarrow && activeBox) && <CapacityBar />}
