@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<!-- Bench timer · 20 Oct 2026 (h) · scan the bench QR to start timing a part away for repair; scan again to stop -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Bench</title>
+  <style>
+    * { box-sizing: border-box; touch-action: manipulation; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #1a1a2e; color: #f1f5f9; margin: 0; padding: 16px; font-size: 18px; }
+    h1 { font-size: 24px; margin: 4px 0 16px; }
+    .card { background: #16213e; border: 2px solid #334155; border-radius: 14px; padding: 16px; margin-bottom: 12px; }
+    .running { border-color: #22c55e; background: #052e1a; }
+    .church { font-size: 15px; color: #94a3b8; }
+    .what { font-size: 20px; font-weight: bold; margin: 4px 0; }
+    .hours { font-size: 15px; color: #cbd5e1; }
+    .elapsed { font-size: 48px; font-weight: bold; font-variant-numeric: tabular-nums; margin: 8px 0; }
+    button { width: 100%; min-height: 64px; border: none; border-radius: 12px; font-size: 22px; font-weight: bold; margin-top: 10px; cursor: pointer; }
+    .stop { background: #ef4444; color: white; }
+    .start { background: #7c3aed; color: white; }
+    .quiet { background: #334155; color: #f1f5f9; font-size: 18px; min-height: 52px; }
+    .msg { text-align: center; color: #94a3b8; padding: 24px 8px; }
+    .done { background: #052e1a; border: 2px solid #22c55e; border-radius: 14px; padding: 16px; margin-bottom: 12px; font-size: 20px; }
+    .err { background: #450a0a; border: 2px solid #ef4444; border-radius: 14px; padding: 16px; margin-bottom: 12px; }
+    label { display: block; font-size: 15px; margin: 10px 0 4px; color: #cbd5e1; }
+    input { width: 100%; padding: 14px; font-size: 16px; border-radius: 10px; border: 2px solid #334155; background: #0f172a; color: #f1f5f9; }
+    .section { font-size: 15px; color: #94a3b8; margin: 18px 0 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+  </style>
+</head>
+<body>
+  <h1>🔧 Bench</h1>
+  <div id="content"><div class="msg">Loading…</div></div>
+
+  <script>
+    // Same address and key as the phone's site tracker (saved on this phone)
+    const getApiUrl = () => localStorage.getItem('organWorks_apiUrl') || '';
+    const getApiKey = () => localStorage.getItem('organWorks_apiKey') || '';
+
+    let state = null;      // { items, running, now }
+    let note = '';         // a line to show at the top after an action
+    let ticker = null;
+
+    function escapeHtml(v) {
+      return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function hoursWords(h) {
+      const m = Math.round((h || 0) * 60);
+      return m === 0 ? 'no time yet' : Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+    }
+    function clock(ms) {
+      const t = Math.max(0, Math.floor(ms / 1000));
+      return Math.floor(t / 3600) + ':' + String(Math.floor((t % 3600) / 60)).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0');
+    }
+
+    async function api(op, extra) {
+      const url = new URL(getApiUrl());
+      url.searchParams.set('action', 'repairAction');
+      const key = getApiKey();
+      if (key) url.searchParams.set('key', key);
+      url.searchParams.set('data', JSON.stringify(Object.assign({ op: op }, extra || {})));
+      const response = await fetch(url.toString());
+      const data = await response.json();
+      if (data && data.error) throw new Error(data.error === 'ACCESS_KEY_REQUIRED' ? 'This phone needs the access key. Open the site tracker on this phone once and enter it there.' : data.error);
+      return data;
+    }
+
+    function showSetup(message) {
+      document.getElementById('content').innerHTML = `
+        ${message ? `<div class="err">${escapeHtml(message)}</div>` : ''}
+        <div class="card">
+          <div>This phone doesn't know where your data is yet. Paste the same details the site tracker uses.</div>
+          <label>Web App URL (ends /exec)</label><input id="setUrl" value="${escapeHtml(getApiUrl())}">
+          <label>Access key</label><input id="setKey" value="${escapeHtml(getApiKey())}">
+          <button class="start" onclick="saveSetup()">Save</button>
+        </div>`;
+    }
+    function saveSetup() {
+      localStorage.setItem('organWorks_apiUrl', document.getElementById('setUrl').value.trim());
+      localStorage.setItem('organWorks_apiKey', document.getElementById('setKey').value.trim());
+      load();
+    }
+
+    async function load() {
+      if (!getApiUrl()) { showSetup(''); return; }
+      try {
+        state = await api('benchStatus');
+        render();
+      } catch (err) {
+        if (/access key|URL/i.test(err.message)) showSetup(err.message);
+        else document.getElementById('content').innerHTML = `<div class="err">Could not reach your data: ${escapeHtml(err.message)}</div><button class="quiet" onclick="load()">Try again</button>`;
+      }
+    }
+
+    function render() {
+      if (ticker) { clearInterval(ticker); ticker = null; }
+      const el = document.getElementById('content');
+      let html = note ? `<div class="done">${note}</div>` : '';
+      const running = state.running;
+      const runningItem = running ? state.items.find(i => i.id === running.jobId) : null;
+
+      if (running) {
+        html += `<div class="card running">
+          <div class="church">${escapeHtml(runningItem ? runningItem.customerName : '')}</div>
+          <div class="what">${escapeHtml(runningItem ? runningItem.description : 'Repair')}</div>
+          <div class="elapsed" id="elapsed">0:00:00</div>
+          <button class="stop" onclick="stopTiming()">⏹ STOP</button>
+        </div>`;
+      }
+
+      const others = state.items.filter(i => !running || i.id !== running.jobId);
+      if (state.items.length === 0) {
+        html += `<div class="msg">Nothing is away for repair.<br><br>Parts you take away are added on the phone at the church (🔧 Took something away) or on the customer screen in the Command Centre.</div>`;
+      } else if (others.length > 0) {
+        html += `<div class="section">${running ? 'Switch to' : 'Tap what you are working on'}</div>`;
+        others.forEach(i => {
+          html += `<div class="card">
+            <div class="church">${escapeHtml(i.customerName)}</div>
+            <div class="what">${escapeHtml(i.description)}</div>
+            <div class="hours">On the bench so far: ${hoursWords(i.hours)}</div>
+            <button class="start" onclick="startTiming('${escapeHtml(i.id)}')">▶ START</button>
+          </div>`;
+        });
+      }
+      html += `<div class="msg" style="padding-top:12px">When a part is finished, tap <strong>Repaired</strong> on it in the Command Centre (Tickets tab) to set the charge.</div>`;
+      el.innerHTML = html;
+
+      if (running) {
+        const started = new Date(running.startTime).getTime();
+        const offset = Date.now() - new Date(state.now).getTime(); // phone clock vs server clock
+        const tick = () => { const e = document.getElementById('elapsed'); if (e) e.textContent = clock(Date.now() - offset - started); };
+        tick();
+        ticker = setInterval(tick, 1000);
+      }
+    }
+
+    let busy = false;
+    async function startTiming(ticketId) {
+      if (busy) return; busy = true;
+      try {
+        await api('benchStart', { ticketId: ticketId });
+        const item = state.items.find(i => i.id === ticketId);
+        note = '▶ Timing started' + (item ? ': ' + escapeHtml(item.description) : '');
+        await load();
+      } catch (err) { alert('Could not start: ' + err.message); }
+      busy = false;
+    }
+    async function stopTiming() {
+      if (busy) return; busy = true;
+      try {
+        const r = await api('benchStop');
+        note = r.stopped ? '⏹ Stopped. That session: ' + hoursWords(r.duration) + (r.cutAtMidnight ? ' (cut off at midnight)' : '') : 'Nothing was running.';
+        await load();
+      } catch (err) { alert('Could not stop: ' + err.message); }
+      busy = false;
+    }
+
+    load();
+  </script>
+</body>
+</html>
