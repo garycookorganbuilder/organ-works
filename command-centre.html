@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Command Centre · 20 Oct 2026 (h) · left panel in three tabs: Tickets, Tunings to book, Big jobs (opens on Tickets; amber count when something is overdue or new from the portal) · New ticket, Days off and New big job buttons at the top; edit a church's name, address, rate and distance; customer portal (codes, visible tickets, access notes); opens on the week; day/week/month/year; Needs you list; Undo; calm view; one word for each thing -->
+<!-- Command Centre · 20 Oct 2026 (h3) · linked tickets (same trip, ticket to ticket or ticket to tuning, booked together; travel chosen on the invoice) · parts away for repair, bench timer, Repaired with charge, Take next visit (📌), repair lines on the invoice · left panel in three tabs: Tickets, Tunings to book, Big jobs (opens on Tickets; amber count when something is overdue or new from the portal) · New ticket, Days off and New big job buttons at the top; edit a church's name, address, rate and distance; customer portal (codes, visible tickets, access notes); opens on the week; day/week/month/year; Needs you list; Undo; calm view; one word for each thing -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -156,6 +156,9 @@ const stable = (name, impl) => {
 };
 
 const TICKET_ICONS = { tuning: '🎹', fault: '⚠️', quote: '💰', reminder: '🔔', 'part-return': '🔧', 'follow-up': '📞' };
+// Small repairs done in the workshop (a pipe taken away etc.)
+const REPAIR_RATE = 45;        // £ an hour, workshop rate
+const REPAIR_MIN_HOURS = 2;    // charged as at least this many hours
 
 // Generate temporary IDs for optimistic updates
 const generateTempId = () => `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -174,7 +177,15 @@ const CommandCentre = () => {
   const [isNarrow, setIsNarrow] = useState(window.innerWidth < 1450);
   const [isCompact, setIsCompact] = useState(window.innerWidth < 1700);
   const [plannerTab, setPlannerTab] = useState('calendar');
-  const [leftTab, setLeftTab] = useState('tickets');          // left panel tab: 'tickets' | 'tunings' | 'bigjobs' (always opens on Tickets)   // 'calendar' | 'todo' (narrow screens only)
+  const [leftTab, setLeftTab] = useState('tickets');
+  const [linkingFrom, setLinkingFrom] = useState(null);      // the ticket whose 🔗 Link button was tapped
+  const [linkSearch, setLinkSearch] = useState('');
+  const [selectedLinkToBook, setSelectedLinkToBook] = useState(null); // a linked group being booked: { tickets, tunings }
+  const [repairDraft, setRepairDraft] = useState('');        // customer screen: what is being taken away / taken next visit
+  const [repairedFor, setRepairedFor] = useState(null);      // the part being marked Repaired (opens the charge box)
+  const [repairedHours, setRepairedHours] = useState(2);
+  const [repairedCharge, setRepairedCharge] = useState('');
+  const [repairedBench, setRepairedBench] = useState(null);   // fresh bench hours for the Repaired box (null = still checking)          // left panel tab: 'tickets' | 'tunings' | 'bigjobs' (always opens on Tickets)   // 'calendar' | 'todo' (narrow screens only)
   const [plannerView, setPlannerView] = useState('week');     // 'day' | 'week' | 'month' | 'year' - always opens on the week
   const [showPastMonths, setShowPastMonths] = useState(null); // null = automatic (hidden on a tablet, shown on a wide screen)
 
@@ -1331,6 +1342,7 @@ const CommandCentre = () => {
     }
     
     if (allocatingProject) { toggleProjectDay(dateStr); return; }
+    if (selectedCustomerToBook && selectedLinkToBook) { await bookLinked(dateStr); return; }
     if (selectedCustomerToBook) { 
       const isFault = selectedTicketToBook !== null && (selectedTicketToBook.type || 'fault') === 'fault';
       const type = isFault ? 'fault' : bookingType;
@@ -1434,13 +1446,16 @@ const CommandCentre = () => {
 
   const selectTicketToBook = (ticket) => {
     const customer = getCustomerById(ticket.customerId);
+    setSelectedLinkToBook(null);
     setSelectedCustomerToBook(customer);
     setSelectedTicketToBook(ticket);
     setBookingType((ticket.type || 'fault') === 'tuning' ? 'OTS' : 'TSC');
     setJobNotes(ticket.description);
   };
 
-  const getOpenTickets = (customerId) => tickets.filter(t => t.customerId === customerId && t.status === 'new');
+  // Repair items (away / take next visit) are shown on their own, never as ordinary tickets
+  const isRepairItem = (t) => t.repairStage === 'away' || t.repairStage === 'ready';
+  const getOpenTickets = (customerId) => tickets.filter(t => t.customerId === customerId && t.status === 'new' && !isRepairItem(t));
 
   // Mark a ticket as done. It leaves the inbox but stays in the sheet (status "closed").
   const closeTicket = async (ticketId) => {
@@ -1512,7 +1527,9 @@ const CommandCentre = () => {
     
     startBgSave();
     try {
-      await apiCall('updateTicket', { data: JSON.stringify(ticket) });
+      // A repair item's stage is changed only by Repaired / Returned, never by Edit
+      const toSend = isRepairItem(originalTicket || {}) ? { id: ticket.id, description: ticket.description, customerId: ticket.customerId } : ticket;
+      await apiCall('updateTicket', { data: JSON.stringify(toSend) });
       endBgSave(true);
     } catch (err) {
       if (originalTicket) {
@@ -1524,6 +1541,311 @@ const CommandCentre = () => {
 
   const isPortalTicket = (t) => t.source === 'portal';
   const isVisibleToChurch = (t) => t.visibleToCustomer === true || t.visibleToCustomer === 'true' || isPortalTicket(t);
+
+  // ============================================================
+  // REPAIRS AND "TAKE NEXT VISIT"
+  //   away -> (Repaired, with a charge) -> ready -> (Returned at a visit) -> returned
+  //   A "take next visit" item starts at ready and has no charge.
+  // ============================================================
+  const repairItemsFor = (customerId) => tickets.filter(t => t.customerId === customerId && t.status === 'new' && isRepairItem(t));
+  const nextVisitFor = (customerId) => {
+    const today = todayStrNow();
+    return bookings.filter(b => b.customerId === customerId && b.type !== 'project' && b.date >= today && ['scheduled', 'confirmed', 'in_progress'].includes(b.status))
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)))[0] || null;
+  };
+  // The visit a part goes back with: today's visit at that church (even if already Done), otherwise the next one booked.
+  // Never one that has been invoiced, or the repair would not be charged.
+  const returnVisitFor = (customerId) => {
+    const today = todayStrNow();
+    const todays = bookings.find(b => b.customerId === customerId && b.type !== 'project' && b.date === today && ['scheduled', 'confirmed', 'in_progress', 'completed'].includes(b.status));
+    return todays || nextVisitFor(customerId);
+  };
+  const benchHoursFor = (ticketId) => timeEntries.filter(te => String(te.jobId) === String(ticketId)).reduce((sum, te) => sum + (parseFloat(te.duration) || 0), 0);
+  const benchRunningFor = (ticketId) => timeEntries.some(te => String(te.jobId) === String(ticketId) && !te.endTime);
+  const repairBilledHours = (hours) => Math.max(REPAIR_MIN_HOURS, Math.ceil((hours || 0) - 0.0001));
+  const hoursWords = (h) => { const m = Math.round((h || 0) * 60); return m === 0 ? 'no time yet' : `${Math.floor(m / 60)}h ${m % 60}m`; };
+  const repairsOnBooking = (bookingId) => tickets.filter(t => t.repairStage === 'returned' && t.repairBookingId === bookingId);
+  const repairChargeOf = (t) => (t.repairNoCharge === true || t.repairNoCharge === 'true') ? 0 : (parseFloat(t.repairCharge) || 0);
+  const isTakeOnly = (t) => t.repairKind === 'take';
+
+  const repairCall = async (op, payload) => apiCall('repairAction', { data: { op, ...payload } });
+
+  // Customer screen: "Took it away for repair" or "Just take it next visit"
+  const addRepairItem = async (customerId, description, kind) => {
+    const text = (description || '').trim();
+    if (!customerId || !text) return;
+    const tempId = generateTempId();
+    const item = { id: tempId, customerId, description: text, type: 'part-return', dueType: 'next-visit', status: 'new', repairKind: kind, repairStage: kind === 'take' ? 'ready' : 'away', createdAt: new Date().toISOString() };
+    setTickets(prev => [...prev, item]);
+    setRepairDraft('');
+    startBgSave();
+    try {
+      const result = await repairCall('add', { customerId, description: text, kind, tempId });
+      learnId(tempId, result.id);
+      setTickets(prev => prev.map(t => t.id === tempId ? { ...t, id: result.id } : t));
+      endBgSave(true);
+    } catch (err) {
+      learnId(tempId, null);
+      setTickets(prev => prev.filter(t => t.id !== tempId));
+      endBgSave(false, err.message);
+    }
+  };
+
+  // Open the Repaired box: hours from the bench timer, rounded up, at least 2
+  const openRepaired = async (ticket) => {
+    const fill = (h) => { const billed = repairBilledHours(h); setRepairedBench(h); setRepairedHours(billed); setRepairedCharge(String(billed * REPAIR_RATE)); };
+    setRepairedBench(null);
+    setRepairedFor(ticket);
+    fill(benchHoursFor(ticket.id)); // what this screen knows, straight away
+    setRepairedBench(null);
+    try {
+      // Ask the sheet: the bench may have been used since this screen was loaded, or still be running
+      const realId = await realIdFor(ticket.id);
+      const status = await repairCall('benchStatus', {});
+      const item = (status.items || []).find(i => i.id === realId);
+      fill(item ? (item.hoursWithRunning || item.hours || 0) : benchHoursFor(ticket.id));
+    } catch (err) {
+      fill(benchHoursFor(ticket.id));
+    }
+  };
+
+  const saveRepaired = async (noCharge) => {
+    const ticket = repairedFor;
+    if (!ticket) return;
+    const original = tickets.find(t => t.id === ticket.id) || ticket;
+    const charge = noCharge ? 0 : Math.max(0, parseFloat(repairedCharge) || 0);
+    const hours = repairedHours;
+    const now = new Date().toISOString();
+    const updated = { ...original, repairStage: 'ready', repairHours: hours, repairCharge: charge, repairNoCharge: noCharge ? 'true' : '', repairedAt: now };
+    setTickets(prev => prev.map(t => t.id === ticket.id ? updated : t));
+    setTimeEntries(prev => prev.map(te => String(te.jobId) === String(ticket.id) && !te.endTime ? { ...te, endTime: now } : te));
+    setRepairedFor(null);
+    offerUndo(`Repaired: ${original.description}${noCharge ? ' (no charge)' : ` · ${formatCurrency(charge)}`}`, async () => {
+      setTickets(prev => prev.map(t => t.id === ticket.id ? original : t));
+      await waitForSaves();
+      const realId = await realIdFor(ticket.id);
+      if (!realId) return;
+      startBgSave();
+      try {
+        await repairCall('restore', { ticketId: realId, fields: { repairStage: 'away', repairHours: original.repairHours || '', repairCharge: original.repairCharge || '', repairNoCharge: original.repairNoCharge || '', repairedAt: original.repairedAt || '' } });
+        endBgSave(true);
+      } catch (err) { endBgSave(false, err.message); }
+    });
+    startBgSave();
+    try {
+      const realId = await realIdFor(ticket.id);
+      if (!realId) throw new Error('That part was never saved');
+      await repairCall('repaired', { ticketId: realId, hours, charge, noCharge: !!noCharge });
+      endBgSave(true);
+    } catch (err) {
+      setTickets(prev => prev.map(t => t.id === ticket.id ? original : t));
+      endBgSave(false, err.message);
+    }
+  };
+
+  // Returned at a visit: it closes, and its charge goes on that visit's invoice
+  const markReturned = async (ticket, booking) => {
+    if (!booking) { setSaveError('Book the visit it goes back with first, then tick Returned on that visit.'); return; }
+    const original = tickets.find(t => t.id === ticket.id) || ticket;
+    const bookingId = booking ? booking.id : '';
+    const now = new Date().toISOString();
+    setTickets(prev => prev.map(t => t.id === ticket.id ? { ...t, repairStage: 'returned', status: 'closed', repairBookingId: bookingId, returnedAt: now } : t));
+    offerUndo(`Returned: ${original.description}`, async () => {
+      setTickets(prev => prev.map(t => t.id === ticket.id ? original : t));
+      await waitForSaves();
+      const realId = await realIdFor(ticket.id);
+      if (!realId) return;
+      startBgSave();
+      try {
+        await repairCall('restore', { ticketId: realId, fields: { repairStage: original.repairStage || 'ready', status: 'new', repairBookingId: '', returnedAt: '' } });
+        endBgSave(true);
+      } catch (err) { endBgSave(false, err.message); }
+    });
+    startBgSave();
+    try {
+      const realId = await realIdFor(ticket.id);
+      const realBookingId = bookingId ? await realIdFor(bookingId) : '';
+      if (!realId) throw new Error('That item was never saved');
+      await repairCall('returned', { ticketId: realId, bookingId: realBookingId || '' });
+      if (realBookingId && realBookingId !== bookingId) setTickets(prev => prev.map(t => t.id === ticket.id ? { ...t, repairBookingId: realBookingId } : t));
+      endBgSave(true);
+    } catch (err) {
+      setTickets(prev => prev.map(t => t.id === ticket.id ? original : t));
+      endBgSave(false, err.message);
+    }
+  };
+
+  // ============================================================
+  // LINKED TICKETS: jobs to do on the same trip
+  //   Tickets that share a linkGroup are shown as one card and booked on the same day.
+  //   A ticket can also be linked to churches whose tuning is due (linkTuning: customer ids).
+  // ============================================================
+  const linkTuningIds = (t) => String(t.linkTuning || '').split(',').filter(Boolean);
+  const plainOpenTickets = tickets.filter(t => t.status === 'new' && !isRepairItem(t));
+  const linkedGroups = (() => {
+    const byGroup = {};
+    plainOpenTickets.forEach(t => { if (t.linkGroup) (byGroup[t.linkGroup] = byGroup[t.linkGroup] || []).push(t); });
+    return Object.keys(byGroup).map(key => {
+      const groupTickets = byGroup[key];
+      const ids = [];
+      groupTickets.forEach(t => linkTuningIds(t).forEach(id => { if (!ids.includes(id)) ids.push(id); }));
+      // only tunings that are still waiting to be booked
+      const tunings = ids.map(id => jobsDue.find(j => j.customer.id === id)).filter(Boolean);
+      return { key, tickets: groupTickets, tunings };
+    }).filter(g => g.tickets.length + g.tunings.length >= 2);
+  })();
+  const linkedGroupOf = (ticket) => linkedGroups.find(g => g.tickets.some(t => t.id === ticket.id)) || null;
+  const linkedGroupForTuning = (customerId) => linkedGroups.find(g => g.tunings.some(j => j.customer.id === customerId)) || null;
+  const groupChurches = (g) => { const names = []; [...g.tickets.map(t => nameFor(t.customerId)), ...g.tunings.map(j => j.customer.name)].forEach(n => { if (!names.includes(n)) names.push(n); }); return names; };
+
+  const linkSave = async (op, payload, snapshot) => {
+    startBgSave();
+    try {
+      const realId = await realIdFor(payload.ticketId);
+      const realOther = payload.otherTicketId ? await realIdFor(payload.otherTicketId) : undefined;
+      if (!realId || (payload.otherTicketId && !realOther)) throw new Error('That ticket was never saved');
+      await repairCall(op, { ...payload, ticketId: realId, ...(realOther ? { otherTicketId: realOther } : {}) });
+      endBgSave(true);
+    } catch (err) {
+      setTickets(snapshot);
+      endBgSave(false, err.message);
+    }
+  };
+
+  const linkTicketTo = (from, other) => {
+    const snapshot = tickets;
+    const group = from.linkGroup || other.linkGroup || ('L' + Date.now());
+    const merging = from.linkGroup && other.linkGroup && from.linkGroup !== other.linkGroup ? other.linkGroup : null;
+    setTickets(prev => prev.map(t => (t.id === from.id || t.id === other.id || (merging && t.linkGroup === merging)) ? { ...t, linkGroup: group } : t));
+    setLinkingFrom(null); setLinkSearch('');
+    linkSave('link', { ticketId: from.id, otherTicketId: other.id, group }, snapshot);
+  };
+
+  const linkTicketToTuning = (from, customerId) => {
+    const snapshot = tickets;
+    const group = from.linkGroup || ('L' + Date.now());
+    setTickets(prev => prev.map(t => t.id === from.id ? { ...t, linkGroup: group, linkTuning: [...linkTuningIds(t).filter(id => id !== customerId), customerId].join(',') } : t));
+    setLinkingFrom(null); setLinkSearch('');
+    linkSave('link', { ticketId: from.id, tuningCustomerId: customerId, group }, snapshot);
+  };
+
+  // A group of one ticket with no tuning is just a ticket again (the sheet does the same)
+  const tidyLinks = (list, group) => {
+    const left = list.filter(t => t.linkGroup === group && t.status === 'new');
+    return left.length === 1 && !linkTuningIds(left[0]).length ? list.map(t => t.id === left[0].id ? { ...t, linkGroup: '' } : t) : list;
+  };
+
+  const unlinkTicket = (ticket) => {
+    const snapshot = tickets;
+    const group = ticket.linkGroup;
+    setTickets(prev => tidyLinks(prev.map(t => t.id === ticket.id ? { ...t, linkGroup: '', linkTuning: '' } : t), group));
+    linkSave('unlink', { ticketId: ticket.id }, snapshot);
+  };
+
+  const unlinkTuning = (group, customerId) => {
+    const holders = group.tickets.filter(t => linkTuningIds(t).includes(customerId));
+    holders.forEach(h => {
+      const snapshot = tickets;
+      setTickets(prev => tidyLinks(prev.map(t => t.id === h.id ? { ...t, linkTuning: linkTuningIds(t).filter(id => id !== customerId).join(',') } : t), group.key));
+      linkSave('unlinkTuning', { ticketId: h.id, tuningCustomerId: customerId }, snapshot);
+    });
+  };
+
+  // Start booking a linked group: the next day tapped books every church in it
+  const selectLinkToBook = (group) => {
+    const firstCustomer = group.tickets.length ? getCustomerById(group.tickets[0].customerId) : group.tunings[0].customer;
+    setSelectedTicketToBook(null);
+    setSelectedGroupToBook(null);
+    setSelectedLinkToBook(group);
+    setSelectedCustomerToBook(firstCustomer);
+    setBookingType(group.tunings.length || group.tickets.some(t => t.type === 'tuning') ? 'OTS' : 'TSC');
+    setCustomQuote('');
+    setJobNotes('');
+  };
+
+  const bookLinked = async (dateStr) => {
+    const group = selectedLinkToBook;
+    if (!group) return;
+    // One visit per church, carrying every ticket for that church
+    const visits = [];
+    const visitFor = (customerId) => { let v = visits.find(x => x.customerId === customerId); if (!v) { v = { customerId, tickets: [], tuning: false }; visits.push(v); } return v; };
+    group.tickets.forEach(t => visitFor(t.customerId).tickets.push(t));
+    group.tunings.forEach(j => { visitFor(j.customer.id).tuning = true; });
+    const names = visits.map(v => nameFor(v.customerId));
+    const svc = bookingType;
+    const planned = visits.map(v => {
+      const isFault = v.tickets.some(t => (t.type || 'fault') === 'fault');
+      const others = names.filter(n => n !== nameFor(v.customerId));
+      const notes = [...v.tickets.map(t => t.description), ...(v.tuning && v.tickets.length ? ['Tuning'] : []), others.length ? `🔗 Same trip: ${others.join(', ')}` : ''].filter(Boolean).join(' · ');
+      return { ...v, tempId: generateTempId(), type: isFault ? 'fault' : svc, serviceType: svc, price: isFault ? DEFAULT_PRICES.fault : 0, notes };
+    });
+    const allTickets = group.tickets;
+    // OPTIMISTIC
+    setBookings(prev => [...prev, ...planned.map(v => ({ id: v.tempId, date: dateStr, customerId: v.customerId, type: v.type, serviceType: v.serviceType, price: v.price, status: 'scheduled', notes: v.notes }))]);
+    setTickets(prev => prev.filter(t => !allTickets.some(x => x.id === t.id)));
+    setSelectedLinkToBook(null); setSelectedCustomerToBook(null); setSelectedTicketToBook(null); setJobNotes(''); setCustomQuote('');
+
+    const saved = []; // { bookingId, tickets }
+    let undone = false;
+    const saving = (async () => {
+      startBgSave();
+      try {
+        for (const v of planned) {
+          const result = await apiCall('addBooking', { data: { date: dateStr, customerId: v.customerId, type: v.type, serviceType: v.serviceType, price: v.price, status: 'scheduled', notes: v.notes } });
+          learnId(v.tempId, result.id);
+          setBookings(prev => prev.map(b => b.id === v.tempId ? { ...b, id: result.id } : b));
+          saved.push({ bookingId: result.id, tickets: v.tickets });
+          for (const t of v.tickets) {
+            const realTicketId = await realIdFor(t.id);
+            if (realTicketId) await apiCall('updateTicket', { data: { id: realTicketId, status: 'scheduled', bookingId: result.id } });
+          }
+        }
+        endBgSave(true);
+      } catch (err) {
+        // Anything not saved goes back as it was
+        const savedTicketIds = saved.flatMap(x => x.tickets.map(t => t.id));
+        setBookings(prev => prev.filter(b => !planned.some(v => v.tempId === b.id))); // saved ones already have their real id
+        if (!undone) setTickets(prev => [...prev, ...allTickets.filter(t => !savedTicketIds.includes(t.id) && !prev.some(p => p.id === t.id))]);
+        endBgSave(false, err.message);
+      }
+    })();
+
+    offerUndo(`Booked ${names.length} churches on ${dayWords(dateStr)}`, async () => {
+      undone = true;
+      setBookings(prev => prev.filter(b => !planned.some(v => v.tempId === b.id)));
+      setTickets(prev => [...prev, ...allTickets.filter(t => !prev.some(p => p.id === t.id))]);
+      await saving;
+      const ids = saved.map(x => x.bookingId);
+      if (ids.length) {
+        setBookings(prev => prev.filter(b => !ids.includes(b.id)));
+        await deleteBookingsQuietly(ids);
+        // Put every ticket back (the sheet only restores one ticket per visit by itself)
+        startBgSave();
+        try {
+          for (const x of saved) for (const t of x.tickets) {
+            const realTicketId = await realIdFor(t.id);
+            if (realTicketId) await apiCall('updateTicket', { data: { id: realTicketId, status: 'new', bookingId: '' } });
+          }
+          endBgSave(true);
+        } catch (err) { endBgSave(false, err.message); }
+      }
+    });
+    await saving;
+  };
+
+  // Ready to go back but no visit booked: start booking a visit for that church
+  const bookVisitFor = (customerId) => {
+    const customer = getCustomerById(customerId);
+    if (!customer) return;
+    setSelectedLinkToBook(null);
+    setSelectedTicketToBook(null);
+    setSelectedGroupToBook(null);
+    setSelectedLinkToBook(null);
+    setSelectedCustomerToBook(customer);
+    setBookingType('OTS');
+    setCustomQuote('');
+    setJobNotes('');
+  };
 
   // Customer portal: a new code for a church
   const newPortalCode = (customer) => {
@@ -1945,6 +2267,11 @@ const CommandCentre = () => {
         <div className="text-sm text-gray-600">{getJobTypeLabel(b.type)}{!isProject ? ` · ${STATUS_WORDS[b.status] || b.status}` : ''}</div>
         {b.notes && !isProject && <div className="text-sm italic">{b.notes}</div>}
         {open.length > 0 && <div className="text-sm text-orange-700 font-medium">📋 {open.length} ticket{open.length === 1 ? '' : 's'} while there</div>}
+        {!isProject && (() => {
+          const nv = returnVisitFor(b.customerId);
+          const take = nv && nv.id === b.id ? repairItemsFor(b.customerId).filter(t => t.repairStage === 'ready') : [];
+          return take.length > 0 ? <div className="text-sm text-purple-800 font-bold" data-pin>📌 Take: {take.map(t => t.description).join(', ')}</div> : null;
+        })()}
       </div>
     );
   };
@@ -2405,6 +2732,29 @@ const CommandCentre = () => {
                     </div>
                   )}
                   
+                  {!isProject && repairItemsFor(booking.customerId).length > 0 && (() => {
+                    const items = repairItemsFor(booking.customerId);
+                    const rv = returnVisitFor(booking.customerId);
+                    const isThisVisit = !!rv && rv.id === booking.id;
+                    return (
+                      <div className="mt-3 p-3 bg-purple-50 rounded-lg border border-purple-300" data-day-repairs>
+                        <div className="text-sm font-bold text-purple-800 mb-1">📌 Take with you</div>
+                        {items.map(t => (
+                          <div key={t.id} className="flex justify-between items-center gap-2 py-1">
+                            <div className="text-sm">{t.repairStage === 'away' ? <span className="text-gray-500">🔧 Still away for repair: </span> : '📌 '}{t.description}</div>
+                            {t.repairStage === 'ready' && isThisVisit && <button onClick={() => markReturned(t, booking)} className="text-sm bg-white border border-purple-300 px-3 py-2 rounded-lg touch-target flex-shrink-0">✓ Returned</button>}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                  {!isProject && repairsOnBooking(booking.id).length > 0 && (
+                    <div className="mt-3 p-3 bg-green-50 rounded-lg border border-green-300 text-sm">
+                      <div className="font-bold text-green-800 mb-1">✓ Returned on this visit (goes on the invoice)</div>
+                      {repairsOnBooking(booking.id).map(t => <div key={t.id}>{t.description}{isTakeOnly(t) ? '' : ` · ${repairChargeOf(t) ? formatCurrency(repairChargeOf(t)) : 'no charge'}`}</div>)}
+                    </div>
+                  )}
+                  
                   {isProvisional && bookingContact && (
                     <div className="mt-3 p-3 bg-yellow-50 rounded-lg border border-yellow-300">
                       <div className="text-sm text-gray-600 mb-1">📞 Contact to confirm:</div>
@@ -2471,7 +2821,9 @@ const CommandCentre = () => {
     const distancePremium = selectedDistance !== null ? selectedDistance : autoDistancePremium;
     
     const materialsTotal = invoiceMaterials.reduce((sum, m) => sum + ((m.cost || 0) * (m.quantity || 1)), 0);
-    const total = serviceCharge + distancePremium + materialsTotal;
+    const invoiceRepairs = repairsOnBooking(showInvoiceCalc.id).filter(t => !isTakeOnly(t));
+    const repairsTotal = invoiceRepairs.reduce((sum, t) => sum + repairChargeOf(t), 0);
+    const total = serviceCharge + distancePremium + materialsTotal + repairsTotal;
     
     const handleAddMaterial = () => {
       if (newMaterialDesc && newMaterialCost) {
@@ -2564,6 +2916,26 @@ const CommandCentre = () => {
             </div>
           </div>
           
+          {(() => {
+            // Other visits the same day: a shared trip, so the travel is chosen here
+            const sameDay = bookings.filter(b => b.date === showInvoiceCalc.date && b.id !== showInvoiceCalc.id && b.type !== 'project');
+            if (sameDay.length === 0) return null;
+            const half = Math.round(autoDistancePremium / 2 * 100) / 100;
+            const choice = selectedDistance === null ? autoDistancePremium : selectedDistance;
+            const opts = [['Full', autoDistancePremium], ['Half', half], ['None', 0]];
+            return (
+              <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4 mb-4" data-shared-trip>
+                <div className="font-bold text-blue-900">🔗 Shared trip</div>
+                <div className="text-sm text-blue-900 mb-2">Also that day: {sameDay.map(b => nameFor(b.customerId)).join(', ')}. Travel for this church:</div>
+                <div className="grid grid-cols-3 gap-2">
+                  {opts.map(([label, value]) => (
+                    <button key={label} onClick={() => setSelectedDistance(value)} className={`p-2 rounded-lg border-2 font-bold touch-target ${choice === value ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-200'}`}>{label}<div className="text-sm font-normal">+£{value}</div></button>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
           <div className="bg-gray-100 rounded-lg p-4 mb-4">
             <div className="flex justify-between mb-2"><span className="text-gray-600">Distance</span><span>{showInvoiceCalc.distance || 0} miles</span></div>
             {pricing.distanceBands.length > 0 && selectedDistance === null && !pricing.distanceBands.some(d => (showInvoiceCalc.distance || 0) >= d.minMiles && (showInvoiceCalc.distance || 0) <= d.maxMiles) && (
@@ -2611,10 +2983,23 @@ const CommandCentre = () => {
             </div>
           </div>
           
+          {invoiceRepairs.length > 0 && (
+            <div className="bg-purple-50 border-2 border-purple-200 rounded-lg p-4 mb-4" data-invoice-repairs>
+              <div className="text-sm text-purple-800 font-bold mb-2">Repairs returned on this visit</div>
+              {invoiceRepairs.map(t => (
+                <div key={t.id} className="flex justify-between items-center bg-white p-2 rounded mb-1">
+                  <span className="text-sm">Repair: {t.description}{t.repairHours ? ` (${t.repairHours}h)` : ''}</span>
+                  <span className="font-medium">{repairChargeOf(t) ? formatCurrency(repairChargeOf(t)) : 'No charge'}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="border-t-2 pt-4 mb-4">
             <div className="flex justify-between text-lg"><span>Service {customAmount ? '(custom)' : `(${selectedBand}h)`}</span><span>£{serviceCharge.toFixed(2)}</span></div>
             <div className="flex justify-between text-lg"><span>Distance</span><span>+£{distancePremium}</span></div>
             {materialsTotal > 0 && <div className="flex justify-between text-lg"><span>Materials</span><span>+£{materialsTotal.toFixed(2)}</span></div>}
+            {repairsTotal > 0 && <div className="flex justify-between text-lg"><span>Repairs</span><span>+£{repairsTotal.toFixed(2)}</span></div>}
             <div className="flex justify-between text-2xl font-bold mt-2 pt-2 border-t"><span>Total</span><span className="text-green-600">£{total.toFixed(2)}</span></div>
           </div>
           
@@ -2955,9 +3340,15 @@ const CommandCentre = () => {
                 <div className={isNarrow ? 'grid grid-cols-2 gap-4 items-start' : ''}>
                 <div>
                 <div className={`font-bold text-lg ${selectedTicketToBook ? 'text-orange-800' : selectedGroupToBook ? 'text-blue-800' : 'text-green-800'}`}>
-                  {selectedTicketToBook ? ((selectedTicketToBook.type || 'fault') === 'fault' ? '🔧 Booking Fault:' : '📋 Booking from ticket:') : selectedGroupToBook ? `🔗 Booking Group (${selectedGroupToBook.length}):` : '📍 Booking:'}
+                  {selectedLinkToBook ? `🔗 Same trip (${groupChurches(selectedLinkToBook).length} churches):` : selectedTicketToBook ? ((selectedTicketToBook.type || 'fault') === 'fault' ? '🔧 Booking Fault:' : '📋 Booking from ticket:') : selectedGroupToBook ? `🔗 Booking Group (${selectedGroupToBook.length}):` : '📍 Booking:'}
                 </div>
-                {selectedGroupToBook ? (
+                {selectedLinkToBook ? (
+                  <div className="space-y-1 mt-2" data-link-booking>
+                    {selectedLinkToBook.tickets.map(t => <div key={t.id} className="text-blue-800 bg-white rounded px-2 py-1"><span className="font-medium">{nameFor(t.customerId)}</span> · {TICKET_ICONS[t.type] || '📋'} {t.description}</div>)}
+                    {selectedLinkToBook.tunings.map(j => <div key={j.customer.id} className="text-blue-800 bg-white rounded px-2 py-1"><span className="font-medium">{j.customer.name}</span> · 🎹 Tuning</div>)}
+                    <div className="text-sm text-blue-800">All go on the day you tap. Travel is chosen on each invoice.</div>
+                  </div>
+                ) : selectedGroupToBook ? (
                   <div className="space-y-1 mt-2">
                     {selectedGroupToBook.map((item, idx) => (
                       <div key={idx} className="font-medium text-blue-700 bg-white rounded px-2 py-1">{item.customer.name}</div>
@@ -2967,7 +3358,7 @@ const CommandCentre = () => {
                   <div className={`font-medium text-lg ${selectedTicketToBook ? 'text-orange-700' : 'text-green-700'}`}>{selectedCustomerToBook.name}</div>
                 )}
                 {selectedTicketToBook && <div className="text-sm text-orange-600 mt-1">"{selectedTicketToBook.description}"</div>}
-                {!selectedGroupToBook && getOpenTickets(selectedCustomerToBook.id).filter(t => t.id !== selectedTicketToBook?.id).length > 0 && (
+                {!selectedGroupToBook && !selectedLinkToBook && getOpenTickets(selectedCustomerToBook.id).filter(t => t.id !== selectedTicketToBook?.id).length > 0 && (
                   <div className="mt-2 p-2 bg-white rounded-lg border text-sm">
                     <div className="font-bold text-gray-700">📋 Also open for this customer:</div>
                     {getOpenTickets(selectedCustomerToBook.id).filter(t => t.id !== selectedTicketToBook?.id).map(t => (
@@ -2990,7 +3381,7 @@ const CommandCentre = () => {
                   <input type="text" value={jobNotes} onChange={(e) => setJobNotes(e.target.value)} className="w-full p-3 border rounded-lg text-sm" placeholder="e.g. Fix cipher, service swell" />
                 </div>
                 
-                {!selectedGroupToBook && !selectedTicketToBook && (
+                {!selectedGroupToBook && !selectedTicketToBook && !selectedLinkToBook && (
                   <div className="grid grid-cols-2 gap-2 mt-3">
                     <button onClick={clearBlock} className={`py-3 rounded-lg text-sm font-medium touch-target ${blockMode !== 'job' ? 'bg-gray-800 text-white' : 'bg-gray-200'}`}>One day</button>
                     <button onClick={() => startBlock('job')} className={`py-3 rounded-lg text-sm font-medium touch-target ${blockMode === 'job' ? 'bg-gray-800 text-white' : 'bg-gray-200'}`}>Several days</button>
@@ -2999,7 +3390,7 @@ const CommandCentre = () => {
                 {blockMode === 'job'
                   ? blockControls
                   : <div className={`text-lg mt-3 font-bold text-center p-3 rounded-lg ${selectedTicketToBook ? 'text-orange-700 bg-orange-200' : 'text-green-700 bg-green-200'}`}>👆 Now tap a day on the calendar</div>}
-                <button onClick={() => { clearBlock(); setSelectedCustomerToBook(null); setSelectedGroupToBook(null); setSelectedTicketToBook(null); setCustomQuote(''); setJobNotes(''); }} className="w-full mt-3 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target">Cancel</button>
+                <button onClick={() => { clearBlock(); setSelectedLinkToBook(null); setSelectedCustomerToBook(null); setSelectedGroupToBook(null); setSelectedTicketToBook(null); setCustomQuote(''); setJobNotes(''); }} className="w-full mt-3 py-3 bg-gray-200 rounded-lg text-lg font-medium touch-target">Cancel</button>
                 </div>
                 </div>
               </div>
@@ -3078,12 +3469,16 @@ const CommandCentre = () => {
     toInvoice: visitBookings.filter(b => b.status === 'completed').sort(byDate),
     toBePaid: visitBookings.filter(b => b.status === 'invoiced').sort(byDate),
   };
-  const openTicketCount = tickets.filter(t => t.status === 'new').length;
+  // Repair items in the Tickets tab: parts away for repair, and repaired parts with no visit booked to take them back
+  const repairsForTab = tickets.filter(t => t.status === 'new' && (t.repairStage === 'away' || (t.repairStage === 'ready' && !returnVisitFor(t.customerId))));
+  // A linked group counts as one thing to book
+  const singleTickets = plainOpenTickets.filter(t => !linkedGroupOf(t));
+  const openTicketCount = singleTickets.length + linkedGroups.length + repairsForTab.length;
   const todoCount = needs.notDone.length + needs.toConfirm.length + needs.toInvoice.length + needs.toBePaid.length + openTicketCount + jobsDue.length;
 
   // Left panel tabs: Tickets (visits waiting + tickets) · Tunings to book · Big jobs
   const ticketsTabCount = needs.notDone.length + needs.toConfirm.length + needs.toInvoice.length + needs.toBePaid.length + openTicketCount;
-  const ticketsTabAlert = needs.notDone.length > 0 || tickets.some(t => t.status === 'new' && (isPortalTicket(t) || (t.dueDate && String(t.dueDate) < todayForNeeds)));
+  const ticketsTabAlert = needs.notDone.length > 0 || repairsForTab.some(t => t.repairStage === 'ready') || tickets.some(t => t.status === 'new' && !isRepairItem(t) && (isPortalTicket(t) || (t.dueDate && String(t.dueDate) < todayForNeeds)));
   const tuningsTabAlert = jobsDue.some(j => j.urgent);
   // Whatever is being worked on decides the tab, so a form never sits hidden in another tab
   const shownTab = (allocatingProject || showNewProject) ? 'bigjobs' : showAddTicket ? 'tickets' : leftTab;
@@ -3143,7 +3538,7 @@ const CommandCentre = () => {
               {plannerSearch.length > 0 && (
                 <div className="absolute top-full left-0 right-0 bg-white border-2 rounded-b-lg shadow-lg max-h-64 overflow-y-auto z-50">
                   {customers.filter(c => c.name.toLowerCase().includes(plannerSearch.toLowerCase())).slice(0, 10).map(c => (
-                    <div key={c.id} onMouseDown={(e) => e.preventDefault()} onClick={() => { setSelectedCustomerToBook(c); setBookingType('OTS'); setPlannerSearch(''); }} className="p-3 hover:bg-blue-50 cursor-pointer border-b">
+                    <div key={c.id} onMouseDown={(e) => e.preventDefault()} onClick={() => { setSelectedLinkToBook(null); setSelectedCustomerToBook(c); setBookingType('OTS'); setPlannerSearch(''); }} className="p-3 hover:bg-blue-50 cursor-pointer border-b">
                       <div className="font-medium">{c.name}</div>
                     </div>
                   ))}
@@ -3233,7 +3628,7 @@ const CommandCentre = () => {
             
             {/* Tickets */}
             {(tickets.length > 0 || showAddTicket) && (() => {
-              const activeTickets = tickets.filter(t => t.status === 'new');
+              const activeTickets = tickets.filter(t => t.status === 'new' && !isRepairItem(t));
               const typeIcons = { tuning: '🎹', fault: '⚠️', quote: '💰', reminder: '🔔', 'part-return': '🔧', 'follow-up': '📞' };
               
               const renderTicket = (ticket) => {
@@ -3249,8 +3644,9 @@ const CommandCentre = () => {
                     {ticket.dueDate && <div className="text-xs text-gray-500 mt-1">Due: {formatDate(ticket.dueDate)}</div>}
                     {!ticket.dueDate && ticket.dueType === 'next-visit' && <div className="text-xs text-gray-500 mt-1">Due: next visit</div>}
                     <div className="text-sm font-bold text-orange-700 mt-2">👆 Tap to book a visit</div>
-                    <div className="grid grid-cols-3 gap-2 mt-2">
+                    <div className="grid grid-cols-2 gap-2 mt-2">
                       <button onClick={(e) => { e.stopPropagation(); closeTicket(ticket.id); }} className="text-sm bg-white border border-gray-300 py-3 rounded-lg touch-target">✓ Done</button>
+                      <button onClick={(e) => { e.stopPropagation(); setLinkSearch(''); setLinkingFrom(ticket); }} className="text-sm bg-white border border-blue-400 text-blue-800 font-bold py-3 rounded-lg touch-target" data-link-btn>🔗 Link</button>
                       <button onClick={(e) => { e.stopPropagation(); openEditTicket(ticket); }} className="text-sm bg-white border border-gray-300 py-3 rounded-lg touch-target">Edit</button>
                       <button onClick={(e) => { e.stopPropagation(); deleteTicket(ticket.id); }} className="text-sm bg-white border border-gray-300 py-3 rounded-lg touch-target text-red-700">Delete</button>
                     </div>
@@ -3262,9 +3658,73 @@ const CommandCentre = () => {
                 <div className="mb-4">
                   {activeTickets.length > 0 && (
                     <>
-                      <h3 className="font-bold text-gray-700 mb-2">Tickets ({activeTickets.length})</h3>
-                      {activeTickets.map(renderTicket)}
+                      <h3 className="font-bold text-gray-700 mb-2">Tickets ({singleTickets.length + linkedGroups.length})</h3>
+                      {linkedGroups.map(g => {
+                        const isSelected = selectedLinkToBook && selectedLinkToBook.key === g.key;
+                        return (
+                          <div key={g.key} className={`p-3 rounded-lg mb-2 border-2 ${isSelected ? 'bg-blue-100 border-blue-600' : 'bg-blue-50 border-blue-400'}`} data-link-group>
+                            <div className="font-bold text-blue-900">🔗 Same trip · {groupChurches(g).join(' + ')}</div>
+                            {g.tickets.map(t => (
+                              <div key={t.id} className="mt-2 p-2 bg-white rounded-lg border border-blue-200">
+                                <div className="font-medium">{TICKET_ICONS[t.type] || '📋'} {nameFor(t.customerId)}</div>
+                                {isPortalTicket(t) && <div className="inline-block text-xs font-bold bg-blue-600 text-white px-2 py-1 rounded mt-1">From the portal</div>}
+                                <div className="text-sm text-gray-700">{t.description}</div>
+                                <div className="grid grid-cols-3 gap-2 mt-2">
+                                  <button onClick={() => closeTicket(t.id)} className="text-sm bg-white border border-gray-300 py-2 rounded-lg touch-target">✓ Done</button>
+                                  <button onClick={() => openEditTicket(t)} className="text-sm bg-white border border-gray-300 py-2 rounded-lg touch-target">Edit</button>
+                                  <button onClick={() => unlinkTicket(t)} className="text-sm bg-white border border-gray-300 py-2 rounded-lg touch-target">Unlink</button>
+                                </div>
+                              </div>
+                            ))}
+                            {g.tunings.map(j => (
+                              <div key={j.customer.id} className="mt-2 p-2 bg-white rounded-lg border border-blue-200 flex items-center justify-between gap-2">
+                                <div><div className="font-medium">🎹 {j.customer.name}</div><div className="text-sm text-gray-700">Tuning due {j.monthName}</div></div>
+                                <button onClick={() => unlinkTuning(g, j.customer.id)} className="text-sm bg-white border border-gray-300 px-3 py-2 rounded-lg touch-target flex-shrink-0">Unlink</button>
+                              </div>
+                            ))}
+                            <div className="grid grid-cols-2 gap-2 mt-2">
+                              <button onClick={() => selectLinkToBook(g)} className="py-3 bg-blue-700 text-white font-bold rounded-lg touch-target">📅 Book together</button>
+                              <button onClick={() => { setLinkSearch(''); setLinkingFrom(g.tickets[0]); }} className="py-3 bg-white border border-blue-400 text-blue-800 font-bold rounded-lg touch-target">🔗 Add another</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {singleTickets.map(renderTicket)}
                     </>
+                  )}
+                  {repairsForTab.length > 0 && (
+                    <div data-repairs-list>
+                      <h3 className="font-bold text-gray-700 mb-2 mt-2">Repairs ({repairsForTab.length})</h3>
+                      {repairsForTab.map(t => {
+                        const away = t.repairStage === 'away';
+                        const hrs = benchHoursFor(t.id);
+                        return (
+                          <div key={t.id} className={`p-3 rounded-lg mb-2 border-2 ${away ? 'bg-purple-50 border-purple-300' : 'bg-amber-50 border-amber-400'}`} data-repair={t.repairStage}>
+                            <div className="font-bold">🔧 {nameFor(t.customerId)}</div>
+                            <div className="text-sm text-gray-800">{t.description}</div>
+                            {away ? (
+                              <>
+                                <div className="text-sm text-purple-800 mt-1">Away for repair · on the bench: {hoursWords(hrs)}{benchRunningFor(t.id) ? ' · ⏱ timing now' : ''}</div>
+                                <div className="grid grid-cols-3 gap-2 mt-2">
+                                  <button onClick={() => openRepaired(t)} className="text-sm bg-purple-600 text-white font-bold py-3 rounded-lg touch-target">Repaired</button>
+                                  <button onClick={() => openEditTicket(t)} className="text-sm bg-white border border-gray-300 py-3 rounded-lg touch-target">Edit</button>
+                                  <button onClick={() => deleteTicket(t.id)} className="text-sm bg-white border border-gray-300 py-3 rounded-lg touch-target text-red-700">Delete</button>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="text-sm text-amber-800 font-bold mt-1">{isTakeOnly(t) ? 'To take next visit' : 'Repaired, ready to go back'} · no visit booked</div>
+                                <div className="grid grid-cols-3 gap-2 mt-2">
+                                  <button onClick={() => bookVisitFor(t.customerId)} className="text-sm bg-gray-800 text-white font-bold py-3 rounded-lg touch-target">Book a visit</button>
+                                  <button onClick={() => openEditTicket(t)} className="text-sm bg-white border border-gray-300 py-3 rounded-lg touch-target">Edit</button>
+                                  <button onClick={() => deleteTicket(t.id)} className="text-sm bg-white border border-gray-300 py-3 rounded-lg touch-target text-red-700">Delete</button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
                 </div>
               );
@@ -3301,10 +3761,14 @@ const CommandCentre = () => {
                   
                   return (
                     <div key={idx} onClick={() => {
+                      const trip = !isGroup && linkedGroupForTuning(entry.items[0].customer.id);
+                      if (trip) { selectLinkToBook(trip); return; }
                       if (isGroup) {
                         setSelectedGroupToBook(entry.items);
+                        setSelectedLinkToBook(null);
                         setSelectedCustomerToBook(entry.items[0].customer);
                       } else {
+                        setSelectedLinkToBook(null);
                         setSelectedCustomerToBook(entry.items[0].customer);
                         setSelectedGroupToBook(null);
                       }
@@ -3321,7 +3785,10 @@ const CommandCentre = () => {
                           </div>
                         </>
                       ) : (
-                        <div className="font-bold text-lg">{entry.items[0].customer.name}</div>
+                        <>
+                          <div className="font-bold text-lg">{entry.items[0].customer.name}</div>
+                          {linkedGroupForTuning(entry.items[0].customer.id) && <div className="text-sm text-blue-800 font-medium">🔗 Same trip as {groupChurches(linkedGroupForTuning(entry.items[0].customer.id)).filter(n => n !== entry.items[0].customer.name).join(', ')}</div>}
+                        </>
                       )}
                       <div className="flex justify-between items-center mt-1">
                         <span className={`text-sm ${entry.urgent ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>{entry.monthName} {entry.urgent && '⚠️'}</span>
@@ -3622,6 +4089,30 @@ const CommandCentre = () => {
               </div>
             </div>
             
+            {/* Repairs and things to take next visit */}
+            <div className="border-t-2 pt-4 mb-6" data-repair-section>
+              <h3 className="font-bold text-xl mb-3">📌 Take next visit</h3>
+              {repairItemsFor(editingCustomer.id).length === 0 && <div className="text-gray-500 mb-3">Nothing waiting to go back.</div>}
+              {repairItemsFor(editingCustomer.id).map(t => (
+                <div key={t.id} className="flex flex-wrap items-center justify-between gap-2 p-3 mb-2 rounded-lg border-2 border-purple-200 bg-purple-50">
+                  <div>
+                    <div className="font-medium">{t.description}</div>
+                    <div className="text-sm text-purple-800">{t.repairStage === 'away' ? `🔧 Away for repair · bench ${hoursWords(benchHoursFor(t.id))}` : isTakeOnly(t) ? '📌 To take next visit' : `📌 Repaired · ${repairChargeOf(t) ? formatCurrency(repairChargeOf(t)) : 'no charge'}`}{t.repairStage === 'ready' ? (returnVisitFor(t.customerId) ? ` · goes ${dayWords(returnVisitFor(t.customerId).date)}` : ' · no visit booked') : ''}</div>
+                  </div>
+                  <div className="flex gap-2">
+                    {t.repairStage === 'away' && <button onClick={() => openRepaired(t)} className="bg-purple-600 text-white font-bold px-4 py-3 rounded-lg touch-target">Repaired</button>}
+                    {t.repairStage === 'ready' && returnVisitFor(t.customerId) && <button onClick={() => markReturned(t, returnVisitFor(t.customerId))} className="bg-white border-2 border-purple-300 px-4 py-3 rounded-lg touch-target">✓ Returned</button>}
+                    <button onClick={() => deleteTicket(t.id)} className="bg-white border-2 border-gray-300 text-red-700 px-4 py-3 rounded-lg touch-target">Delete</button>
+                  </div>
+                </div>
+              ))}
+              <div className="flex flex-wrap gap-2 mt-2">
+                <input type="text" value={repairDraft} onChange={(e) => setRepairDraft(e.target.value)} placeholder="e.g. Trumpet C#3 pipe – split seam" className="flex-1 min-w-[220px] p-3 border-2 rounded-lg" />
+                <button disabled={!repairDraft.trim()} onClick={() => addRepairItem(editingCustomer.id, repairDraft, 'repair')} className="bg-purple-600 text-white font-bold px-4 py-3 rounded-lg touch-target disabled:opacity-50">🔧 Took it away for repair</button>
+                <button disabled={!repairDraft.trim()} onClick={() => addRepairItem(editingCustomer.id, repairDraft, 'take')} className="bg-white border-2 border-purple-300 px-4 py-3 rounded-lg touch-target disabled:opacity-50">📌 Just take it next visit</button>
+              </div>
+            </div>
+
             {/* Customer portal */}
             <div className="border-t-2 pt-4 mb-6" data-portal-section>
               <h3 className="font-bold text-xl mb-3">🔑 Customer portal</h3>
@@ -3661,6 +4152,79 @@ const CommandCentre = () => {
       
       {showProjectSummary && <ProjectSummaryModal key={showProjectSummary.id} project={showProjectSummary} onClose={() => setShowProjectSummary(null)} />}
       {showInvoiceCalc && <InvoiceCalcModal />}
+      {linkingFrom && (() => {
+        const from = tickets.find(t => t.id === linkingFrom.id) || linkingFrom;
+        const fromGroup = linkedGroupOf(from);
+        const inGroup = (t) => fromGroup && fromGroup.tickets.some(x => x.id === t.id);
+        const fromMiles = parseFloat(getCustomerById(from.customerId)?.distance) || 0;
+        const q = linkSearch.trim().toLowerCase();
+        const matches = (text) => !q || String(text || '').toLowerCase().includes(q);
+        const near = (customerId) => Math.abs((parseFloat(getCustomerById(customerId)?.distance) || 0) - fromMiles);
+        const ticketChoices = plainOpenTickets.filter(t => t.id !== from.id && !inGroup(t) && (matches(nameFor(t.customerId)) || matches(t.description)))
+          .sort((a, b) => near(a.customerId) - near(b.customerId));
+        const tuningChoices = [];
+        jobsDue.forEach(j => {
+          if (tuningChoices.some(x => x.customer.id === j.customer.id)) return;
+          if (fromGroup && fromGroup.tunings.some(x => x.customer.id === j.customer.id)) return;
+          if (matches(j.customer.name)) tuningChoices.push(j);
+        });
+        tuningChoices.sort((a, b) => near(a.customer.id) - near(b.customer.id));
+        const miles = (customerId) => { const d = getCustomerById(customerId)?.distance; return d ? ` · ${d} mi` : ''; };
+        return (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={() => setLinkingFrom(null)} data-link-picker>
+            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              <h2 className="text-2xl font-bold mb-1">🔗 Same trip as…</h2>
+              <div className="text-gray-700 mb-3">{nameFor(from.customerId)} · {from.description}</div>
+              <input type="text" value={linkSearch} onChange={(e) => setLinkSearch(e.target.value)} placeholder="Search church…" className="w-full p-3 border-2 rounded-lg mb-3" />
+              <div className="text-sm text-gray-500 mb-2">Nearest first (by miles from the workshop)</div>
+              {ticketChoices.length > 0 && <h3 className="font-bold text-gray-700 mb-2">Tickets</h3>}
+              {ticketChoices.map(t => (
+                <button key={t.id} onClick={() => linkTicketTo(from, t)} className="w-full text-left p-3 mb-2 rounded-lg border-2 border-gray-200 hover:border-blue-400 touch-target">
+                  <div className="font-medium">{TICKET_ICONS[t.type] || '📋'} {nameFor(t.customerId)}<span className="text-gray-500 font-normal">{miles(t.customerId)}</span></div>
+                  <div className="text-sm text-gray-700">{t.description}{linkedGroupOf(t) ? ' · already on a trip (the two trips join)' : ''}</div>
+                </button>
+              ))}
+              {tuningChoices.length > 0 && <h3 className="font-bold text-gray-700 mb-2 mt-2">Tunings to book</h3>}
+              {tuningChoices.map(j => (
+                <button key={j.customer.id} onClick={() => linkTicketToTuning(from, j.customer.id)} className="w-full text-left p-3 mb-2 rounded-lg border-2 border-gray-200 hover:border-blue-400 touch-target">
+                  <div className="font-medium">🎹 {j.customer.name}<span className="text-gray-500 font-normal">{miles(j.customer.id)}</span></div>
+                  <div className="text-sm text-gray-700">Tuning due {j.monthName}</div>
+                </button>
+              ))}
+              {ticketChoices.length === 0 && tuningChoices.length === 0 && <div className="text-gray-500 py-4 text-center">Nothing to link to{q ? ' with that name' : ''}.</div>}
+              <button onClick={() => setLinkingFrom(null)} className="w-full mt-2 py-3 bg-gray-200 rounded-lg font-medium touch-target">Cancel</button>
+            </div>
+          </div>
+        );
+      })()}
+      {repairedFor && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" data-repaired-box>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+            <h2 className="text-2xl font-bold mb-1">Repaired</h2>
+            <div className="text-gray-700 mb-1">{nameFor(repairedFor.customerId)}</div>
+            <div className="font-medium mb-4">{repairedFor.description}</div>
+            <div className="bg-gray-100 rounded-lg p-3 mb-4 text-sm">Time on the bench: <strong>{repairedBench === null ? 'checking…' : hoursWords(repairedBench)}</strong><br />Charged at {formatCurrency(REPAIR_RATE)} an hour, at least {REPAIR_MIN_HOURS} hours, rounded up to the hour.</div>
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <span className="text-lg">Hours to charge</span>
+              <div className="flex items-center gap-2">
+                <button onClick={() => { const h = Math.max(1, repairedHours - 1); setRepairedHours(h); setRepairedCharge(String(h * REPAIR_RATE)); }} className="w-12 h-12 rounded-lg bg-gray-200 text-2xl font-bold touch-target">−</button>
+                <span className="text-2xl font-bold w-10 text-center" data-repaired-hours>{repairedHours}</span>
+                <button onClick={() => { const h = repairedHours + 1; setRepairedHours(h); setRepairedCharge(String(h * REPAIR_RATE)); }} className="w-12 h-12 rounded-lg bg-gray-200 text-2xl font-bold touch-target">+</button>
+              </div>
+            </div>
+            <div className="flex items-center justify-between gap-3 mb-5">
+              <span className="text-lg">Charge</span>
+              <div className="flex items-center gap-1"><span className="text-xl">£</span><input type="number" step="0.01" value={repairedCharge} onChange={(e) => setRepairedCharge(e.target.value)} className="w-28 p-2 border-2 rounded-lg text-xl text-right" data-repaired-charge /></div>
+            </div>
+            <div className="text-sm text-gray-600 mb-4">It goes on the invoice of the visit it goes back with.</div>
+            <div className="grid grid-cols-3 gap-2">
+              <button onClick={() => setRepairedFor(null)} className="py-3 bg-gray-200 rounded-lg font-medium touch-target">Cancel</button>
+              <button onClick={() => saveRepaired(true)} className="py-3 bg-white border-2 border-gray-300 rounded-lg font-medium touch-target">No charge</button>
+              <button onClick={() => saveRepaired(false)} disabled={repairedBench === null} className="py-3 bg-purple-600 text-white rounded-lg font-bold touch-target disabled:opacity-50">Save {formatCurrency(parseFloat(repairedCharge) || 0)}</button>
+            </div>
+          </div>
+        </div>
+      )}
       {zoomedMonth && <MonthZoomView month={zoomedMonth.month} year={zoomedMonth.year} onClose={() => setZoomedMonth(null)} />}
       
       {/* Edit Ticket Modal */}
