@@ -528,6 +528,7 @@ const CommandCentre = () => {
   const isWorkDay = (year, month, day) => { const dow = getDayOfWeek(year, month, day); return dow >= 1 && dow <= 5; };
   const getBookingsForDay = (date) => bookings.filter(b => b.date === date);
   const getCustomerById = (id) => customers.find(c => c.id === id);
+  const directionsUrl = (c) => { const where = String(c?.postcode || '').trim() || String(c?.address || '').trim(); return where ? 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(where) : ''; };
   const getBookingContact = (customerId) => contacts.find(c => c.customerId === customerId && c.isBookingContact) || contacts.find(c => c.customerId === customerId);
   const isDayOff = (date) => daysOff.some(d => d.date === date || d === date);
   const getDayOffReason = (date) => { const dayOff = daysOff.find(d => d.date === date); return dayOff?.reason || ''; };
@@ -1905,7 +1906,9 @@ const CommandCentre = () => {
         tuningMonths: customer.tuningMonths || [],
         tuningNotes: customer.tuningNotes,
         tuningGroup: customer.tuningGroup || '',
-        distance: customer.distance
+        distance: customer.distance,
+        address: customer.address || '',
+        postcode: customer.postcode || ''
       }) });
       endBgSave(true);
     } catch (err) {
@@ -2724,6 +2727,9 @@ const CommandCentre = () => {
                     </div>
                   </div>
                   
+                  {directionsUrl(customer) && (
+                    <a href={directionsUrl(customer)} target="_blank" rel="noopener" className="inline-block mt-3 bg-blue-600 text-white font-bold px-4 py-2 rounded-lg touch-target">🧭 Navigate · {customer.postcode || customer.address}</a>
+                  )}
                   {(customer?.accessNotes) && (
                     <div className="mt-3 p-3 bg-blue-50 rounded-lg border border-blue-200 text-sm whitespace-pre-line"><span className="font-bold text-blue-800">🔑 Access: </span>{customer.accessNotes}</div>
                   )}
@@ -3990,21 +3996,29 @@ const CommandCentre = () => {
                 {customerDraft ? (
                   <div className="grid gap-3" data-customer-edit>
                     <input type="text" value={customerDraft.name} onChange={(e) => setCustomerDraft({ ...customerDraft, name: e.target.value })} className="p-3 border-2 rounded-lg text-2xl font-bold w-full" placeholder="Church name" />
-                    <input type="text" value={customerDraft.notes} onChange={(e) => setCustomerDraft({ ...customerDraft, notes: e.target.value })} className="p-3 border-2 rounded-lg w-full" placeholder="Address / notes (yours only)" />
+                    <div className="grid grid-cols-3 gap-3">
+                      <input type="text" value={customerDraft.address} onChange={(e) => setCustomerDraft({ ...customerDraft, address: e.target.value })} className="col-span-2 p-3 border-2 rounded-lg w-full" placeholder="Address" />
+                      <input type="text" value={customerDraft.postcode} onChange={(e) => setCustomerDraft({ ...customerDraft, postcode: e.target.value.toUpperCase() })} className="p-3 border-2 rounded-lg w-full" placeholder="Postcode" />
+                    </div>
+                    <input type="text" value={customerDraft.notes} onChange={(e) => setCustomerDraft({ ...customerDraft, notes: e.target.value })} className="p-3 border-2 rounded-lg w-full" placeholder="Notes (yours only)" />
                     <div className="grid grid-cols-2 gap-3">
                       <div><label className="text-sm text-gray-600">Custom tuning rate (£, blank = standard)</label><input type="number" value={customerDraft.customRate} onChange={(e) => setCustomerDraft({ ...customerDraft, customRate: e.target.value })} className="p-3 border-2 rounded-lg w-full" /></div>
                       <div><label className="text-sm text-gray-600">Miles from workshop</label><input type="number" value={customerDraft.distance} onChange={(e) => setCustomerDraft({ ...customerDraft, distance: e.target.value })} className="p-3 border-2 rounded-lg w-full" /></div>
                     </div>
                     <div className="flex gap-2">
-                      <button onClick={() => { if (!customerDraft.name.trim()) return; const updated = { ...editingCustomer, name: customerDraft.name.trim(), notes: customerDraft.notes, customRate: customerDraft.customRate === '' ? null : parseFloat(customerDraft.customRate), distance: customerDraft.distance === '' ? '' : parseFloat(customerDraft.distance) }; setEditingCustomer(updated); setCustomerDraft(null); updateCustomer(updated); }} className="bg-green-500 text-white px-5 py-3 rounded-lg font-bold touch-target">Save</button>
+                      <button onClick={() => { if (!customerDraft.name.trim()) return; const updated = { ...editingCustomer, name: customerDraft.name.trim(), notes: customerDraft.notes, address: customerDraft.address.trim(), postcode: customerDraft.postcode.trim(), customRate: customerDraft.customRate === '' ? null : parseFloat(customerDraft.customRate), distance: customerDraft.distance === '' ? '' : parseFloat(customerDraft.distance) }; setEditingCustomer(updated); setCustomerDraft(null); updateCustomer(updated); }} className="bg-green-500 text-white px-5 py-3 rounded-lg font-bold touch-target">Save</button>
                       <button onClick={() => setCustomerDraft(null)} className="bg-gray-200 px-5 py-3 rounded-lg touch-target">Cancel</button>
                     </div>
                   </div>
                 ) : (
                   <div>
                     <h2 className="text-3xl font-bold">{editingCustomer.name}</h2>
-                    <div className="text-gray-600 mt-1">{editingCustomer.notes || <span className="text-gray-400">No address / notes</span>} · {editingCustomer.customRate ? formatCurrency(editingCustomer.customRate) + ' tuning rate' : 'Standard rate'} · {editingCustomer.distance ? editingCustomer.distance + ' miles' : 'distance not set'}</div>
-                    <button onClick={() => setCustomerDraft({ name: editingCustomer.name || '', notes: editingCustomer.notes || '', customRate: editingCustomer.customRate == null ? '' : String(editingCustomer.customRate), distance: editingCustomer.distance == null ? '' : String(editingCustomer.distance) })} className="mt-2 bg-white border-2 border-gray-300 px-4 py-3 rounded-lg touch-target">✏️ Edit name, address, rate, distance</button>
+                    <div className="flex flex-wrap items-center gap-3 mt-1">
+                      <div className="text-gray-800">{[editingCustomer.address, editingCustomer.postcode].filter(Boolean).join(', ') || <span className="text-gray-400">No address yet</span>}</div>
+                      {directionsUrl(editingCustomer) && <a href={directionsUrl(editingCustomer)} target="_blank" rel="noopener" className="bg-blue-600 text-white font-bold px-4 py-2 rounded-lg touch-target">🧭 Navigate</a>}
+                    </div>
+                    <div className="text-gray-600 mt-1">{editingCustomer.notes || <span className="text-gray-400">No notes</span>} · {editingCustomer.customRate ? formatCurrency(editingCustomer.customRate) + ' tuning rate' : 'Standard rate'} · {editingCustomer.distance ? editingCustomer.distance + ' miles' : 'distance not set'}</div>
+                    <button onClick={() => setCustomerDraft({ name: editingCustomer.name || '', address: editingCustomer.address || '', postcode: editingCustomer.postcode || '', notes: editingCustomer.notes || '', customRate: editingCustomer.customRate == null ? '' : String(editingCustomer.customRate), distance: editingCustomer.distance == null ? '' : String(editingCustomer.distance) })} className="mt-2 bg-white border-2 border-gray-300 px-4 py-3 rounded-lg touch-target">✏️ Edit name, address, notes, rate, distance</button>
                   </div>
                 )}
               </div>
