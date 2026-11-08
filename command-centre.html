@@ -528,6 +528,18 @@ const CommandCentre = () => {
   const isWorkDay = (year, month, day) => { const dow = getDayOfWeek(year, month, day); return dow >= 1 && dow <= 5; };
   const getBookingsForDay = (date) => bookings.filter(b => b.date === date);
   const getCustomerById = (id) => customers.find(c => c.id === id);
+  // Tuning estimate from the organ (same rules as code.gs): flues 10 min, mixture ranks 12.5, reeds 17.5, +20 min
+  const tuningEstimate = (c) => {
+    const n = (v) => { const x = parseInt(v, 10); return isFinite(x) && x >= 0 ? x : null; };
+    const f = n(c?.flueRanks), m = n(c?.mixtureRanks), r = n(c?.reeds);
+    if (f === null && m === null && r === null) return null;
+    const mins = (f || 0) * 10 + (m || 0) * 12.5 + (r || 0) * 17.5 + 20;
+    const touch = (f || 0) * 6 + (m || 0) * 12.5 + (r || 0) * 17.5 + 20;
+    const band = (h) => { const b = [[4, 250], [5, 312.5], [6, 375], [7, 437.5], [8, 500]].find(x => h <= x[0] + 1e-9); return b ? b[1] : null; };
+    const words = (min) => { const t = Math.round(min), hh = Math.floor(t / 60), mm = t % 60; return (hh ? hh + 'h' : '') + (mm ? ' ' + mm + 'm' : ''); };
+    const always = mins <= 240;
+    return { organ: `${f || 0} flues${m ? `, mixture ${m} rank${m === 1 ? '' : 's'}` : ''}, ${r || 0} reed${r === 1 ? '' : 's'}`, full: words(mins), fullPrice: band(Math.max(4, mins / 60)), touch: always ? null : words(touch), touchPrice: always ? null : band(Math.max(4, touch / 60)) };
+  };
   const directionsUrl = (c) => { const where = String(c?.postcode || '').trim() || String(c?.address || '').trim(); return where ? 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(where) : ''; };
   const getBookingContact = (customerId) => contacts.find(c => c.customerId === customerId && c.isBookingContact) || contacts.find(c => c.customerId === customerId);
   const isDayOff = (date) => daysOff.some(d => d.date === date || d === date);
@@ -1908,7 +1920,10 @@ const CommandCentre = () => {
         tuningGroup: customer.tuningGroup || '',
         distance: customer.distance,
         address: customer.address || '',
-        postcode: customer.postcode || ''
+        postcode: customer.postcode || '',
+        flueRanks: customer.flueRanks ?? '',
+        mixtureRanks: customer.mixtureRanks ?? '',
+        reeds: customer.reeds ?? ''
       }) });
       endBgSave(true);
     } catch (err) {
@@ -4005,8 +4020,13 @@ const CommandCentre = () => {
                       <div><label className="text-sm text-gray-600">Custom tuning rate (£, blank = standard)</label><input type="number" value={customerDraft.customRate} onChange={(e) => setCustomerDraft({ ...customerDraft, customRate: e.target.value })} className="p-3 border-2 rounded-lg w-full" /></div>
                       <div><label className="text-sm text-gray-600">Miles from workshop</label><input type="number" value={customerDraft.distance} onChange={(e) => setCustomerDraft({ ...customerDraft, distance: e.target.value })} className="p-3 border-2 rounded-lg w-full" /></div>
                     </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div><label className="text-sm text-gray-600">Flue ranks</label><input type="number" min="0" value={customerDraft.flueRanks} onChange={(e) => setCustomerDraft({ ...customerDraft, flueRanks: e.target.value })} className="p-3 border-2 rounded-lg w-full" /></div>
+                      <div><label className="text-sm text-gray-600">Mixture ranks (III = 3)</label><input type="number" min="0" value={customerDraft.mixtureRanks} onChange={(e) => setCustomerDraft({ ...customerDraft, mixtureRanks: e.target.value })} className="p-3 border-2 rounded-lg w-full" /></div>
+                      <div><label className="text-sm text-gray-600">Reeds</label><input type="number" min="0" value={customerDraft.reeds} onChange={(e) => setCustomerDraft({ ...customerDraft, reeds: e.target.value })} className="p-3 border-2 rounded-lg w-full" /></div>
+                    </div>
                     <div className="flex gap-2">
-                      <button onClick={() => { if (!customerDraft.name.trim()) return; const updated = { ...editingCustomer, name: customerDraft.name.trim(), notes: customerDraft.notes, address: customerDraft.address.trim(), postcode: customerDraft.postcode.trim(), customRate: customerDraft.customRate === '' ? null : parseFloat(customerDraft.customRate), distance: customerDraft.distance === '' ? '' : parseFloat(customerDraft.distance) }; setEditingCustomer(updated); setCustomerDraft(null); updateCustomer(updated); }} className="bg-green-500 text-white px-5 py-3 rounded-lg font-bold touch-target">Save</button>
+                      <button onClick={() => { if (!customerDraft.name.trim()) return; const updated = { ...editingCustomer, name: customerDraft.name.trim(), notes: customerDraft.notes, address: customerDraft.address.trim(), postcode: customerDraft.postcode.trim(), flueRanks: customerDraft.flueRanks === '' ? '' : parseInt(customerDraft.flueRanks, 10), mixtureRanks: customerDraft.mixtureRanks === '' ? '' : parseInt(customerDraft.mixtureRanks, 10), reeds: customerDraft.reeds === '' ? '' : parseInt(customerDraft.reeds, 10), customRate: customerDraft.customRate === '' ? null : parseFloat(customerDraft.customRate), distance: customerDraft.distance === '' ? '' : parseFloat(customerDraft.distance) }; setEditingCustomer(updated); setCustomerDraft(null); updateCustomer(updated); }} className="bg-green-500 text-white px-5 py-3 rounded-lg font-bold touch-target">Save</button>
                       <button onClick={() => setCustomerDraft(null)} className="bg-gray-200 px-5 py-3 rounded-lg touch-target">Cancel</button>
                     </div>
                   </div>
@@ -4017,8 +4037,9 @@ const CommandCentre = () => {
                       <div className="text-gray-800">{[editingCustomer.address, editingCustomer.postcode].filter(Boolean).join(', ') || <span className="text-gray-400">No address yet</span>}</div>
                       {directionsUrl(editingCustomer) && <a href={directionsUrl(editingCustomer)} target="_blank" rel="noopener" className="bg-blue-600 text-white font-bold px-4 py-2 rounded-lg touch-target">🧭 Navigate</a>}
                     </div>
+                    <div className="mt-1 text-gray-800">{(() => { const t = tuningEstimate(editingCustomer); return t ? <span>🎹 {t.organ} · full tune about {t.full}{t.fullPrice ? ` · ${formatCurrency(t.fullPrice)}` : ' · more than a day'}{t.touch ? ` · touch-up about ${t.touch}, ${formatCurrency(t.touchPrice)}` : ' · always a full tune'}</span> : <span className="text-gray-400">🎹 Organ size not recorded (planned as 4 hours)</span>; })()}</div>
                     <div className="text-gray-600 mt-1">{editingCustomer.notes || <span className="text-gray-400">No notes</span>} · {editingCustomer.customRate ? formatCurrency(editingCustomer.customRate) + ' tuning rate' : 'Standard rate'} · {editingCustomer.distance ? editingCustomer.distance + ' miles' : 'distance not set'}</div>
-                    <button onClick={() => setCustomerDraft({ name: editingCustomer.name || '', address: editingCustomer.address || '', postcode: editingCustomer.postcode || '', notes: editingCustomer.notes || '', customRate: editingCustomer.customRate == null ? '' : String(editingCustomer.customRate), distance: editingCustomer.distance == null ? '' : String(editingCustomer.distance) })} className="mt-2 bg-white border-2 border-gray-300 px-4 py-3 rounded-lg touch-target">✏️ Edit name, address, notes, rate, distance</button>
+                    <button onClick={() => setCustomerDraft({ name: editingCustomer.name || '', address: editingCustomer.address || '', postcode: editingCustomer.postcode || '', flueRanks: editingCustomer.flueRanks == null ? '' : String(editingCustomer.flueRanks), mixtureRanks: editingCustomer.mixtureRanks == null ? '' : String(editingCustomer.mixtureRanks), reeds: editingCustomer.reeds == null ? '' : String(editingCustomer.reeds), notes: editingCustomer.notes || '', customRate: editingCustomer.customRate == null ? '' : String(editingCustomer.customRate), distance: editingCustomer.distance == null ? '' : String(editingCustomer.distance) })} className="mt-2 bg-white border-2 border-gray-300 px-4 py-3 rounded-lg touch-target">✏️ Edit name, address, organ, notes, rate, distance</button>
                   </div>
                 )}
               </div>
